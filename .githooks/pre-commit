@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+# pre-commit — run typecheck and lint before every commit (0 LLM tokens)
+# Reads verify_commands from .hive/AGENTS.local.md
+
+[[ "${HIVE_SKIP_HOOKS:-}" == "1" ]] && exit 0
+
+HIVE_CONFIG=".hive/AGENTS.local.md"
+[[ ! -f "$HIVE_CONFIG" ]] && exit 0
+
+# Portable config reader — sed replaces grep -oP (\K not available in BSD grep)
+_cfg() { sed -n "s/^[[:space:]]*${1}:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "$HIVE_CONFIG" 2>/dev/null | head -1; }
+
+# Extract commands (null or empty → skip)
+TYPECHECK=$(_cfg typecheck)
+LINT=$(_cfg lint)
+[[ "$TYPECHECK" == "null" ]] && TYPECHECK=""
+[[ "$LINT"      == "null" ]] && LINT=""
+
+[[ -z "$TYPECHECK" && -z "$LINT" ]] && exit 0
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
+echo -e "${CYAN}[pre-commit]${NC} Running checks..."
+
+TMP_OUT=$(mktemp)
+trap 'rm -f "$TMP_OUT"' EXIT
+
+run_check() {
+    local label="$1" cmd="$2"
+    # Skip tool-specific commands when the project hasn't been scaffolded yet
+    local skip_reason=""
+    if echo "$cmd" | grep -qE '(^|\s)(npm|yarn|pnpm) ' && [[ ! -f "package.json" ]]; then
+        skip_reason="no package.json"
+    elif echo "$cmd" | grep -qE '(^|\s)mypy ' && [[ ! -d "src" ]]; then
+        skip_reason="no src/ directory"
+    elif echo "$cmd" | grep -qE '(^|\s)dotnet ' && ! ls ./*.csproj ./*.sln 2>/dev/null | grep -q .; then
+        skip_reason="no .csproj/.sln"
+    elif echo "$cmd" | grep -qE '(^|\s)mvn ' && [[ ! -f "pom.xml" ]]; then
+        skip_reason="no pom.xml"
+    elif echo "$cmd" | grep -qE '(^|\s)go ' && [[ ! -f "go.mod" ]]; then
+        skip_reason="no go.mod"
+    fi
+    if [[ -n "$skip_reason" ]]; then
+        echo -n "  ${label}... "
+        echo -e "\033[0;33m⚠ skipped\033[0m (${skip_reason} — run after scaffolding)"
+        return
+    fi
+    echo -n "  ${label}... "
+    if eval "$cmd" > "$TMP_OUT" 2>&1; then
+        echo -e "${GREEN}✓${NC}"
+    else
+        echo -e "${RED}✗${NC}"
+        echo "" >&2
+        cat "$TMP_OUT" >&2
+        echo "" >&2
+        echo -e "  ${RED}[pre-commit]${NC} ${label} failed — fix errors before committing." >&2
+        exit 1
+    fi
+}
+
+[[ -n "$TYPECHECK" ]] && run_check "typecheck" "$TYPECHECK"
+[[ -n "$LINT"      ]] && run_check "lint"      "$LINT"
+
+# ── DDD boundary check ────────────────────────────────────────
+# Detects cross-layer imports in staged files — 0 LLM tokens
+# Enforces: Domain must not import Infrastructure/Presentation
+#           Application must not import Presentation
+
+STACK=$(_cfg stack)
+STAGED_ALL=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || echo "")
+DDD_PASS=0
+
+ddd_check() {
+    local file="$1" pattern="$2" label="$3"
+    if git show ":${file}" 2>/dev/null | grep -qE -- "$pattern"; then
+        echo -e "  ${RED}✗${NC} DDD violation — ${file}" >&2
+        echo -e "    ${label}" >&2
+        DDD_PASS=1
+    fi
+}
+
+case "$STACK" in
+    node-react-prisma|python-nextjs)
+        while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            if echo "$f" | grep -qE '/(domain)/'; then
+                ddd_check "$f" \
+                    'from ['"'"'"].*(/infrastructure|/prisma|/database|\.repository\.impl|/controller|/router)' \
+                    "Domain must not import from infrastructure or presentation"
+            fi
+            if echo "$f" | grep -qE '/(application|use-cases?)/'; then
+                ddd_check "$f" \
+                    'from ['"'"'"].*(/controller|/router|\.impl['"'"'"])' \
+                    "Application must not import from presentation or concrete infrastructure types"
+            fi
+        done <<< "$(echo "$STAGED_ALL" | grep -E '\.(ts|tsx|js|jsx)$')"
+        ;;
+    go)
+        while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            if echo "$f" | grep -qE 'internal/domain/'; then
+                ddd_check "$f" \
+                    '"[^"]*/internal/(infrastructure|handler)' \
+                    "Domain package must not import from infrastructure or handler"
+            fi
+            if echo "$f" | grep -qE 'internal/application/'; then
+                ddd_check "$f" \
+                    '"[^"]*/internal/handler' \
+                    "Application package must not import from handler layer"
+            fi
+        done <<< "$(echo "$STAGED_ALL" | grep '\.go$')"
+        ;;
+    python-fastapi|python-nextjs)
+        while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            if echo "$f" | grep -qE '/domain/'; then
+                ddd_check "$f" \
+                    '^from.*(infrastructure|presentation|routers?|database)' \
+                    "Domain layer must not import from infrastructure or presentation"
+            fi
+        done <<< "$(echo "$STAGED_ALL" | grep '\.py$')"
+        ;;
+    dotnet)
+        while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            if echo "$f" | grep -qE '/Domain/'; then
+                ddd_check "$f" \
+                    '^using.*\.(Infrastructure|Presentation|Controllers)' \
+                    "Domain layer must not import from Infrastructure or Presentation"
+            fi
+            if echo "$f" | grep -qE '/Application/'; then
+                ddd_check "$f" \
+                    '^using.*\.(Presentation|Controllers)' \
+                    "Application layer must not import from Presentation"
+            fi
+        done <<< "$(echo "$STAGED_ALL" | grep '\.cs$')"
+        ;;
+    java-spring)
+        while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            if echo "$f" | grep -qE 'src/main/java.*/domain/'; then
+                ddd_check "$f" \
+                    '^import.*\.(infrastructure|presentation|controller|repository\.impl)' \
+                    "Domain layer must not import from infrastructure or presentation"
+            fi
+            if echo "$f" | grep -qE 'src/main/java.*/application/'; then
+                ddd_check "$f" \
+                    '^import.*\.(controller|presentation)' \
+                    "Application layer must not import from presentation"
+            fi
+        done <<< "$(echo "$STAGED_ALL" | grep '\.java$')"
+        ;;
+esac
+
+if [[ $DDD_PASS -ne 0 ]]; then
+    echo "" >&2
+    echo -e "  ${RED}[pre-commit]${NC} DDD boundary violation(s) detected." >&2
+    echo "  Cross-layer imports break encapsulation and make code untestable." >&2
+    echo "  Fix the imports above, or bypass with: HIVE_SKIP_HOOKS=1 git commit" >&2
+    exit 1
+fi
+
+# ── Secret scanning ───────────────────────────────────────────
+# Detects hardcoded credentials in staged content — no external deps
+# Checks for: AWS keys, private keys, GitHub tokens, generic high-entropy secrets
+# Does NOT scan .env.example, .env.template, or test fixtures
+
+SECRET_PASS=0
+STAGED_TEXT=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || echo "")
+
+secret_check() {
+    local file="$1" pattern="$2" label="$3"
+    # Skip allowed paths
+    if echo "$file" | grep -qE '(\.env\.(example|template|sample)|test/fixtures|evals/fixtures|\.gitleaks\.toml|AGENTS\.local\.template\.md)'; then
+        return
+    fi
+    if git show ":${file}" 2>/dev/null | grep -qE -- "$pattern"; then
+        echo -e "  ${RED}✗${NC} Secret detected — ${file}" >&2
+        echo -e "    ${label}" >&2
+        SECRET_PASS=1
+    fi
+}
+
+while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+
+    # AWS access key ID
+    secret_check "$f" \
+        'AKIA[0-9A-Z]{16}' \
+        "AWS access key ID (AKIA...)"
+
+    # AWS secret access key — only flag when assigned to a variable
+    secret_check "$f" \
+        '(AWS_SECRET_ACCESS_KEY|aws_secret_access_key)\s*[=:]\s*["'"'"']?[A-Za-z0-9/+]{40}["'"'"']?' \
+        "AWS secret access key"
+
+    # Private keys
+    secret_check "$f" \
+        '-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY' \
+        "Private key material"
+
+    # GitHub tokens
+    secret_check "$f" \
+        'gh[ps]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{82,}' \
+        "GitHub personal access token"
+
+    # Generic high-entropy secret assignments (>= 32 chars after = or :)
+    secret_check "$f" \
+        '(SECRET|secret|PASSWORD|password|API_KEY|api_key|PRIVATE_KEY|private_key)\s*[=:]\s*["'"'"'][A-Za-z0-9+/=_\-]{32,}["'"'"']' \
+        "High-entropy secret value assigned to a sensitive variable"
+
+done <<< "$STAGED_TEXT"
+
+# Staged .env files (not .env.example)
+while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    if echo "$f" | grep -qE '(^|/)\.env$|(^|/)\.env\.[^.]'; then
+        if ! echo "$f" | grep -qE '\.(example|template|sample)$'; then
+            echo -e "  ${RED}✗${NC} Staged .env file — ${f}" >&2
+            echo -e "    .env files must not be committed. Add to .gitignore." >&2
+            SECRET_PASS=1
+        fi
+    fi
+done <<< "$STAGED_TEXT"
+
+if [[ $SECRET_PASS -ne 0 ]]; then
+    echo "" >&2
+    echo -e "  ${RED}[pre-commit]${NC} Potential secret(s) detected in staged files." >&2
+    echo "  Remove the secret, rotate it if already pushed, then commit." >&2
+    echo "  To bypass (use only if this is a false positive):" >&2
+    echo "    HIVE_SKIP_HOOKS=1 git commit" >&2
+    exit 1
+fi
+
+exit 0

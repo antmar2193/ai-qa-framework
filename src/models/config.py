@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator
 
 
 class ViewportConfig(BaseModel):
@@ -39,22 +41,49 @@ class AuthConfig(BaseModel):
     success_indicator: str = ""
     auto_detect: bool = True
     llm_fallback: bool = True
+    # Stores the original "env:VAR_NAME" reference so save() restores it instead of the resolved value.
+    # Excluded from model_dump() so it never leaks into serialized output directly.
+    password_env_ref: Optional[str] = Field(default=None, exclude=True)
 
-    @field_validator("password", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def resolve_env_password(cls, v: str) -> str:
-        if isinstance(v, str) and v.startswith("env:"):
-            env_var = v[4:]
+    def resolve_env_password(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        pw = data.get("password", "")
+        if isinstance(pw, str) and pw.startswith("env:"):
+            env_var = pw[4:]
             resolved = os.environ.get(env_var)
             if resolved is None:
                 raise ValueError(f"Environment variable '{env_var}' not set")
-            return resolved
-        return v
+            data = dict(data)
+            data["password_env_ref"] = pw
+            data["password"] = resolved
+        return data
+
+    @field_serializer("password")
+    def _serialize_password(self, value: str) -> str:
+        # When writing to disk, restore the env: reference so passwords are never persisted in plaintext.
+        return self.password_env_ref if self.password_env_ref else value
 
 
 class FrameworkConfig(BaseModel):
     # Target
     target_url: str
+
+    @field_validator("target_url", mode="before")
+    @classmethod
+    def validate_target_url(cls, v: str) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("target_url must be a non-empty string")
+        parsed = urlparse(v.strip())
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(
+                f"target_url must use http or https scheme, got '{parsed.scheme}'"
+            )
+        if not parsed.netloc:
+            raise ValueError("target_url must include a host")
+        return v.strip()
 
     # Authentication
     auth: Optional[AuthConfig] = None

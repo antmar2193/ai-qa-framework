@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# pre-push — run tests before every push (0 LLM tokens)
+# Incremental mode: runs only tests related to changed files when possible.
+# Falls back to full suite when: incremental not supported, >30 files changed,
+# or changed files can't be mapped to test targets.
+# CI gate: blocks push to main if check-principles.sh or shellcheck fail.
+
+[[ "${HIVE_SKIP_HOOKS:-}" == "1" ]] && exit 0
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
+
+# ── Read all push refs from stdin upfront ─────────────────────
+PUSH_REFS=$(cat)
+PUSHING_TO_MAIN=0
+while IFS=' ' read -r _lr _ls remote_ref _rs; do
+    [[ "$remote_ref" == "refs/heads/main" ]] && PUSHING_TO_MAIN=1
+done <<< "$PUSH_REFS"
+
+# ── Gate: block push to main if CI checks fail ────────────────
+# Mirrors the CI jobs that GitHub cannot enforce on a free-plan private repo.
+if [[ $PUSHING_TO_MAIN -eq 1 ]]; then
+    failed=0
+
+    echo -e "${CYAN}[pre-push]${NC} Pushing to main — running CI gate checks..."
+    echo ""
+
+    # 1. Principle & structure check
+    if bash scripts/check-principles.sh; then
+        echo -e "${GREEN}  ✓ Principles OK${NC}"
+    else
+        echo -e "${RED}  ✗ Principles check failed${NC}" >&2
+        failed=1
+    fi
+    echo ""
+
+    # 2. ShellCheck
+    if command -v shellcheck >/dev/null 2>&1; then
+        if find scripts/ -name "*.sh" -print0 | xargs -0 shellcheck -S warning; then
+            echo -e "${GREEN}  ✓ ShellCheck OK${NC}"
+        else
+            echo -e "${RED}  ✗ ShellCheck failed${NC}" >&2
+            failed=1
+        fi
+    else
+        echo -e "${CYAN}  ~ shellcheck not installed — skipping${NC}"
+    fi
+    echo ""
+
+    if [[ $failed -ne 0 ]]; then
+        echo -e "${RED}[pre-push]${NC} CI gate failed — push to main blocked." >&2
+        echo "  Fix the issues above, or bypass with: HIVE_SKIP_HOOKS=1 git push" >&2
+        exit 1
+    fi
+
+    echo -e "${GREEN}[pre-push]${NC} CI gate passed."
+    echo ""
+fi
+
+# ── Project test suite (HIVE-managed projects only) ───────────
+HIVE_CONFIG=".hive/AGENTS.local.md"
+[[ ! -f "$HIVE_CONFIG" ]] && exit 0
+
+TEST_CMD=$(sed -n 's/^[[:space:]]*test:[[:space:]]*"\([^"]*\)".*/\1/p' "$HIVE_CONFIG" 2>/dev/null | head -1 || echo "")
+[[ "$TEST_CMD" == "null" || -z "$TEST_CMD" ]] && exit 0
+
+# Get files changed in this push (between remote and local HEAD)
+# Falls back to last commit if remote ref is unknown
+get_changed_files() {
+    local remote="$1" local_ref="$2"
+    local changed=""
+
+    if [[ -n "$remote" ]] && git rev-parse "$remote" &>/dev/null; then
+        changed=$(git diff --name-only "$remote".."$local_ref" 2>/dev/null)
+    fi
+
+    if [[ -z "$changed" ]]; then
+        # Fallback: files changed in last commit
+        changed=$(git diff --name-only HEAD~1..HEAD 2>/dev/null || git diff --name-only HEAD 2>/dev/null)
+    fi
+
+    echo "$changed"
+}
+
+build_incremental_cmd() {
+    local test_cmd="$1"
+    local changed_files="$2"
+
+    local src_files
+    # Only source files (not test files themselves) trigger smart detection
+    src_files=$(echo "$changed_files" | grep -vE '(test|spec|_test)\.' | tr '\n' ' ')
+    [[ -z "$src_files" ]] && src_files="$changed_files"
+
+    local file_count
+    file_count=$(echo "$changed_files" | grep -c . 2>/dev/null || echo "0")
+
+    # Too many changes → full suite is more reliable
+    if [[ "$file_count" -gt 30 ]]; then
+        echo ""  # signal: use full suite
+        return
+    fi
+
+    # Jest / Vitest
+    if echo "$test_cmd" | grep -qE '(jest|vitest)'; then
+        local ts_files
+        ts_files=$(echo "$changed_files" | grep -E '\.(ts|tsx|js|jsx)$' | tr '\n' ' ')
+        if [[ -n "$ts_files" ]]; then
+            # jest --findRelatedTests needs space-separated file paths
+            echo "$(echo "$test_cmd" | sed 's/jest/jest --passWithNoTests --findRelatedTests/;s/vitest run/vitest run --reporter=verbose/') $ts_files"
+            return
+        fi
+    fi
+
+    # Go
+    if echo "$test_cmd" | grep -qE '^go test'; then
+        local go_files
+        go_files=$(echo "$changed_files" | grep '\.go$')
+        if [[ -n "$go_files" ]]; then
+            # Get unique package paths from changed go files
+            local pkgs
+            pkgs=$(echo "$go_files" | xargs -I{} dirname {} | sort -u | sed 's|^|./|' | tr '\n' ' ')
+            [[ -n "$pkgs" ]] && echo "go test $pkgs" && return
+        fi
+    fi
+
+    # pytest
+    if echo "$test_cmd" | grep -qE 'pytest'; then
+        local py_files
+        py_files=$(echo "$changed_files" | grep '\.py$')
+        if [[ -n "$py_files" ]]; then
+            local py_dirs
+            py_dirs=$(echo "$py_files" | xargs -I{} dirname {} | sort -u | tr '\n' ' ')
+            [[ -n "$py_dirs" ]] && echo "pytest $py_dirs" && return
+        fi
+    fi
+
+    # dotnet test — no reliable incremental for .NET, run full
+    # mvn test — no reliable incremental for Maven, run full
+    # fallthrough: signal to use full suite
+    echo ""
+}
+
+# Process each pushed ref for project test suite
+echo "$PUSH_REFS" | while read -r local_ref local_sha remote_ref remote_sha; do
+    CHANGED=$(get_changed_files "$remote_sha" "$local_sha")
+    INCREMENTAL_CMD=$(build_incremental_cmd "$TEST_CMD" "$CHANGED")
+
+    if [[ -n "$INCREMENTAL_CMD" && "$INCREMENTAL_CMD" != "$TEST_CMD" ]]; then
+        FILE_COUNT=$(echo "$CHANGED" | grep -c . 2>/dev/null || echo "?")
+        echo -e "${CYAN}[pre-push]${NC} Running incremental tests (${FILE_COUNT} files changed)..."
+        echo ""
+        RUN_CMD="$INCREMENTAL_CMD"
+    else
+        echo -e "${CYAN}[pre-push]${NC} Running full test suite..."
+        echo ""
+        RUN_CMD="$TEST_CMD"
+    fi
+
+    if eval "$RUN_CMD"; then
+        echo ""
+        echo -e "${GREEN}[pre-push]${NC} Tests passed. Pushing."
+    else
+        echo ""
+        echo -e "${RED}[pre-push]${NC} Tests failed — push aborted." >&2
+        echo "  Fix failures above, or bypass with: HIVE_SKIP_HOOKS=1 git push" >&2
+        exit 1
+    fi
+done
+
+exit 0

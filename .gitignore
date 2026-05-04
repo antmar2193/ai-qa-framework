@@ -33,3 +33,5 @@ venv/
 # Project-local notes
 CLAUDE.md
 IMPROVEMENT_PLAN.md
+# HIVE — active session state (not shared)
+.hive/sessions/

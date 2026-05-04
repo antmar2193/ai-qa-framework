@@ -175,21 +175,41 @@ export ANTHROPIC_API_KEY=your_key_here
 ### First Run
 
 ```bash
-# Create a config file for your site
-python -m src.cli init --target https://yoursite.com
+# Create a named project for your site
+python -m src.cli project create --name mysite --target https://yoursite.com
 
-# Run the full pipeline
+# Run the full pipeline (uses active project automatically)
 python -m src.cli run
 
 # View your report
-open qa-reports/report_*.html
+open ~/.qa-framework/projects/mysite/qa-reports/report_*.html
 ```
 
 That's it! The framework will:
 - Crawl your site (5-10 minutes for ~50 pages)
 - Generate tests (30-60 seconds)
 - Execute tests (10-20 minutes for ~25 tests)
-- Create a detailed HTML report
+- Create a detailed HTML report in your project directory
+
+### Managing Multiple Sites
+
+Each site gets its own named project under `~/.qa-framework/`:
+
+```bash
+# Create projects for each site
+python -m src.cli project create --name myshop  --target https://myshop.com
+python -m src.cli project create --name myblog  --target https://myblog.com
+
+# Switch between them
+python -m src.cli project use myshop
+python -m src.cli run
+
+python -m src.cli project use myblog
+python -m src.cli run
+
+# View all projects
+python -m src.cli project list
+```
 
 ---
 
@@ -235,35 +255,65 @@ The bare minimum in `qa-config.json`:
 
 ## CLI Commands
 
+### Project Management
+
+```bash
+# Create a new project
+python -m src.cli project create --name <name> --target <url>
+
+# List all projects (shows last run stats and active marker)
+python -m src.cli project list
+
+# Switch active project
+python -m src.cli project use <name>
+
+# View run history for a project
+python -m src.cli project history <name> [--last 10]
+
+# Import an existing qa-config.json
+python -m src.cli project import --name <name> --config qa-config.json
+
+# Delete a project and its history
+python -m src.cli project delete <name>
+```
+
 ### Pipeline Operations
 
 ```bash
 # Full pipeline (crawl → plan → execute → report)
+# Uses active project automatically; or pass --project to be explicit
 python -m src.cli run
+python -m src.cli run --project mysite
 
 # Individual stages
-python -m src.cli crawl                    # Discover site structure
-python -m src.cli plan                     # Generate test plan
-python -m src.cli execute --plan-file ...  # Run specific tests
+python -m src.cli crawl   [--project <name>]           # Discover site structure
+python -m src.cli plan    [--project <name>]           # Generate test plan
+python -m src.cli execute [--project <name>] --plan-file <f>  # Run specific tests
 ```
+
+Config resolution order (first match wins):
+1. `--config path` — legacy mode, output follows config's `report_output_dir`
+2. `--project name` — named project in `~/.qa-framework/projects/<name>/`
+3. Active project set by `project use`
+4. `qa-config.json` in current directory
 
 ### Coverage Management
 
 ```bash
 # View coverage statistics
-python -m src.cli coverage
+python -m src.cli coverage [--project <name>]
 
 # Find coverage gaps
-python -m src.cli coverage --gaps
+python -m src.cli coverage --gaps [--project <name>]
 
 # Reset coverage history
-python -m src.cli coverage --reset
+python -m src.cli coverage --reset [--project <name>]
 ```
 
 ### Hint Management
 
 ```bash
-# Add a priority hint
+# Add a priority hint (pass --config to target a specific project's config)
 python -m src.cli hint add "Prioritize the checkout flow"
 
 # List current hints
@@ -319,6 +369,8 @@ The report shows:
 
 ## Project Structure
 
+### Source code
+
 ```
 ai-qa-framework/
 ├── src/
@@ -328,15 +380,55 @@ ai-qa-framework/
 │   ├── reporter/         # Report generation
 │   ├── coverage/         # Coverage tracking
 │   ├── ai/               # Claude API integration
-│   └── models/           # Data structures
-│
-├── qa-config.json        # Your configuration
-├── .qa-framework/        # Generated data
-│   ├── site_model/       # Crawl results
-│   ├── coverage/         # Coverage registry
-│   └── debug/            # AI debug logs
-│
-└── qa-reports/           # Test reports (HTML/JSON)
+│   ├── projects/         # Multi-project registry + config resolver
+│   │   ├── registry.py   # ProjectRegistry: create/get/list/delete, name validation
+│   │   ├── resolver.py   # resolve_config(): --project / active / legacy priority
+│   │   └── exceptions.py # ProjectNotFoundError, ProjectAlreadyExistsError
+│   ├── web/              # FastAPI web server
+│   │   ├── app.py        # Application factory (CORS, static files, routers)
+│   │   ├── run_manager.py  # Background run execution, SSE log bridge, run_meta.json
+│   │   ├── validation.py   # Path-traversal + extension guards (shared)
+│   │   ├── excel_export.py # generate_xlsx() — three-sheet openpyxl report
+│   │   └── routers/
+│   │       ├── projects.py # Project CRUD + run history list
+│   │       ├── runs.py     # Trigger, SSE stream, detail, evidence, Excel export
+│   │       └── reports.py  # Serve HTML/JSON report files
+│   ├── models/           # Pydantic v2 data structures (shared contract layer)
+│   └── orchestrator.py   # Pipeline orchestration (accepts runs_dir)
+└── web/                  # React + Vite 5 + Tailwind CSS 3 frontend
+    ├── src/
+    │   ├── pages/        # Dashboard, ProjectDetail, RunDetail, ReportViewer
+    │   ├── components/   # NavBar, RunHistoryTable, LiveLogPanel, RunConfigModal, …
+    │   └── api/client.ts # Typed fetch wrappers for all API endpoints
+    └── dist/             # Built output (gitignored; served by FastAPI in production)
+```
+
+### Runtime data
+
+Projects are stored in `~/.qa-framework/`, isolated from the repo:
+
+```
+~/.qa-framework/
+├── active-project            # Name of the currently active project
+└── projects/
+    ├── mysite/
+    │   ├── config.json       # target URL, auth, hints, AI settings
+    │   ├── runs/
+    │   │   └── {run-id}/
+    │   │       ├── run_result.json   # pass/fail stats, per-test results, timing
+    │   │       ├── run_meta.json     # triggered_at, categories, ai_model, auth_username (NO password)
+    │   │       └── evidence/         # screenshots and video per step
+    │   └── qa-reports/
+    │       ├── report_{run-id}.html  # interactive HTML report
+    │       └── report_{run-id}.json  # machine-readable results
+    └── myshop/
+        └── ...
+
+# Local working data (written into the project directory, not the repo)
+.qa-framework/
+├── site_model/model.json     # crawled site structure
+├── coverage/registry.json    # coverage history
+└── debug/                    # AI debug logs
 ```
 
 ---
@@ -405,13 +497,62 @@ ai-qa-framework/
 
 ---
 
+## Web Interface
+
+The framework ships with a browser UI for managing projects and reviewing results without the CLI.
+
+### Starting the server
+
+```bash
+# Build the frontend once (or after frontend changes)
+cd web && npm run build && cd ..
+
+# Start the API + UI server (defaults to http://localhost:8000)
+python -m src.cli serve
+python -m src.cli serve --host 0.0.0.0 --port 8080
+```
+
+### What you can do in the UI
+
+| Page | Path | Description |
+|------|------|-------------|
+| Dashboard | `/` | List all projects; create or delete a project; set the active project |
+| Project detail | `/projects/:name` | Run history, "Run Now" button with config dialog, live log stream |
+| Run detail | `/projects/:name/runs/:id` | Per-test results, screenshots and video evidence, run metadata, Excel download |
+| Report viewer | `/projects/:name/reports/:id` | Full-screen HTML report |
+
+### Pre-run configuration dialog
+
+Clicking **Run Now** opens a modal where you can supply:
+- **Credentials** — username and password (applied in memory only, never persisted)
+- **Test categories** — select any combination of functional / visual / security
+- **Extra hints** — one per line; added to the project hints for this run only
+
+### Export to Excel
+
+Every completed run has a **Export Excel** button. The `.xlsx` file contains three sheets:
+- **Summary** — run metadata, pass/fail totals, AI summary
+- **Test Cases** — all tests with result, category, duration
+- **Errors** — only failed/error tests with failure reason and step details
+
+From the CLI:
+
+```bash
+python -m src.cli export --project mysite --run-id <run-id> [--output report.xlsx]
+```
+
+---
+
 ## Technical Stack
 
 - **Python 3.12+** for framework core
+- **FastAPI + uvicorn** for the web UI server
+- **React 18 + Vite 5 + Tailwind CSS 3** for the browser UI
 - **Playwright** for browser automation
 - **Claude AI (Anthropic)** for intelligent test generation
-- **Pydantic** for data validation
+- **Pydantic v2** for data validation
 - **Jinja2** for report templating
+- **openpyxl** for Excel export
 - **Pillow** for image comparison
 
 ---
@@ -490,11 +631,10 @@ We welcome contributions! Areas of interest:
 Ready to get started?
 
 ```bash
-# Install and run your first test
 pip install -r requirements.txt
 playwright install chromium
-python -m src.cli init --target https://yoursite.com
 export ANTHROPIC_API_KEY=your_key_here
+python -m src.cli project create --name mysite --target https://yoursite.com
 python -m src.cli run
 ```
 

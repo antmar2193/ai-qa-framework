@@ -1,0 +1,706 @@
+# Standards: Backend (python-fastapi stack)
+> Extends `core/standards/core.mdc`. Read core first.
+> Stack: Python 3.12+ · FastAPI 0.115+ · Pydantic v2 · SQLAlchemy 2 async · PostgreSQL · pytest
+
+---
+
+## 1. Project Structure
+
+```
+src/
+├── domain/
+│   ├── entities/              # Pydantic domain models (no DB coupling)
+│   ├── value_objects/         # Immutable value types
+│   ├── services/              # Pure domain services (no I/O)
+│   ├── repositories/          # Repository interfaces (Protocol-based)
+│   └── exceptions.py          # Domain exception hierarchy
+├── application/
+│   ├── use_cases/             # One file per use case
+│   ├── schemas/               # Pydantic DTOs (request/response)
+│   └── interfaces.py          # Application-level Protocols
+├── infrastructure/
+│   ├── database/
+│   │   ├── models.py          # SQLAlchemy ORM models (table=True)
+│   │   ├── session.py         # Async engine + sessionmaker
+│   │   └── repositories/      # SQLAlchemy repository implementations
+│   ├── clients/               # External HTTP clients (httpx)
+│   └── config.py              # pydantic-settings Settings
+└── presentation/
+    ├── routers/               # FastAPI APIRouter per resource
+    ├── deps.py                # Shared Depends() functions
+    ├── middleware.py          # Custom ASGI middleware
+    ├── exception_handlers.py  # Exception → HTTPException mapping
+    └── main.py                # FastAPI app + lifespan + router registration
+```
+
+---
+
+## 2. DDD Layer Rules
+
+### Layer responsibilities (never cross these boundaries)
+
+| Layer | Allowed | Forbidden |
+|---|---|---|
+| **Domain** | Pydantic entities, Value Objects, pure business logic, repository Protocols | SQLAlchemy imports, FastAPI imports, any I/O, HTTP concerns |
+| **Application** | Orchestrate domain, call repositories via Protocols, validate inputs | Business logic (belongs in domain), direct SQLAlchemy calls |
+| **Infrastructure** | SQLAlchemy queries, external clients, config | Business logic, HTTP concerns, FastAPI imports |
+| **Presentation** | Parse HTTP request, call use case, format response | Business logic, direct DB queries, domain logic |
+
+---
+
+## 3. Domain Entity Pattern
+
+Domain entities are pure Pydantic models — no SQLAlchemy decorators or DB concerns.
+
+```python
+# domain/entities/employee.py
+from __future__ import annotations
+from datetime import datetime
+from uuid import UUID, uuid4
+from pydantic import BaseModel, EmailStr, field_validator
+from src.domain.exceptions import ConflictError, ValidationError
+
+
+class Employee(BaseModel):
+    id: UUID = None  # type: ignore[assignment]
+    first_name: str
+    last_name: str
+    email: str
+    created_at: datetime = None  # type: ignore[assignment]
+    department_ids: list[UUID] = []
+
+    model_config = {"frozen": True}  # Value-like immutability
+
+    @classmethod
+    def create(cls, first_name: str, last_name: str, email: str) -> Employee:
+        if not first_name.strip():
+            raise ValidationError("first_name must not be empty")
+        return cls(
+            id=uuid4(),
+            first_name=first_name.strip(),
+            last_name=last_name.strip(),
+            email=email.strip().lower(),
+            created_at=datetime.utcnow(),
+        )
+
+    def change_email(self, new_email: str) -> Employee:
+        """Returns a new Employee with the updated email (immutable pattern)."""
+        return self.model_copy(update={"email": new_email.strip().lower()})
+```
+
+### Value Object pattern
+
+```python
+# domain/value_objects/email.py
+from pydantic import GetCoreSchemaHandler
+from pydantic_core import core_schema
+
+
+class Email(str):
+    """Email value object — validated, normalized."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type, handler: GetCoreSchemaHandler):
+        return core_schema.no_info_after_validator_function(cls._validate, core_schema.str_schema())
+
+    @classmethod
+    def _validate(cls, value: str) -> "Email":
+        if "@" not in value:
+            raise ValueError(f"Invalid email: {value}")
+        return cls(value.strip().lower())
+```
+
+### Repository Protocol (domain layer)
+
+```python
+# domain/repositories/employee_repository.py
+from typing import Protocol
+from uuid import UUID
+from src.domain.entities.employee import Employee
+
+
+class EmployeeRepositoryProtocol(Protocol):
+    async def get_by_id(self, id: UUID) -> Employee | None: ...
+    async def get_by_email(self, email: str) -> Employee | None: ...
+    async def list(self, offset: int, limit: int) -> tuple[list[Employee], int]: ...
+    async def save(self, employee: Employee) -> Employee: ...
+    async def delete(self, id: UUID) -> None: ...
+```
+
+---
+
+## 4. SQLAlchemy 2 Async Patterns
+
+### ORM model (infrastructure layer — separate from domain entity)
+
+```python
+# infrastructure/database/models.py
+from datetime import datetime
+from uuid import UUID, uuid4
+from sqlalchemy import String, DateTime, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class EmployeeModel(Base):
+    __tablename__ = "employees"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    first_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    last_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+```
+
+### Async session setup
+
+```python
+# infrastructure/database/session.py
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from src.infrastructure.config import settings
+
+engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+
+async def get_session() -> AsyncSession:
+    async with AsyncSessionLocal() as session:
+        yield session
+```
+
+### Repository implementation
+
+```python
+# infrastructure/database/repositories/employee_repository.py
+from uuid import UUID
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.domain.entities.employee import Employee
+from src.infrastructure.database.models import EmployeeModel
+
+
+class EmployeeRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get_by_id(self, id: UUID) -> Employee | None:
+        result = await self._session.get(EmployeeModel, id)
+        return self._to_domain(result) if result else None
+
+    async def get_by_email(self, email: str) -> Employee | None:
+        stmt = select(EmployeeModel).where(EmployeeModel.email == email)
+        result = await self._session.scalar(stmt)
+        return self._to_domain(result) if result else None
+
+    async def list(self, offset: int = 0, limit: int = 20) -> tuple[list[Employee], int]:
+        count_stmt = select(func.count()).select_from(EmployeeModel)
+        list_stmt = select(EmployeeModel).offset(offset).limit(limit)
+
+        total = await self._session.scalar(count_stmt) or 0
+        rows = (await self._session.scalars(list_stmt)).all()
+        return [self._to_domain(r) for r in rows], total
+
+    async def save(self, employee: Employee) -> Employee:
+        model = EmployeeModel(
+            id=employee.id,
+            first_name=employee.first_name,
+            last_name=employee.last_name,
+            email=employee.email,
+        )
+        self._session.add(model)
+        await self._session.commit()
+        await self._session.refresh(model)
+        return self._to_domain(model)
+
+    @staticmethod
+    def _to_domain(model: EmployeeModel) -> Employee:
+        return Employee(
+            id=model.id,
+            first_name=model.first_name,
+            last_name=model.last_name,
+            email=model.email,
+            created_at=model.created_at,
+        )
+```
+
+**Rules for SQLAlchemy 2 async:**
+- Always use `AsyncSession` — never mix sync and async sessions
+- Use `select()` statements (Core-style), not legacy `query()` API
+- Avoid lazy loading in async context — it raises `MissingGreenlet` errors
+- Use `selectinload()` or `joinedload()` explicitly for relationships
+- `expire_on_commit=False` on sessionmaker to avoid lazy loads after commit
+
+---
+
+## 5. Use Case Pattern (Application Layer)
+
+```python
+# application/use_cases/create_employee.py
+from src.domain.entities.employee import Employee
+from src.domain.exceptions import ConflictError
+from src.domain.repositories.employee_repository import EmployeeRepositoryProtocol
+from src.application.schemas.employee import CreateEmployeeRequest, EmployeeResponse
+
+
+class CreateEmployeeUseCase:
+    def __init__(self, employee_repo: EmployeeRepositoryProtocol) -> None:
+        self._employee_repo = employee_repo
+
+    async def execute(self, request: CreateEmployeeRequest) -> EmployeeResponse:
+        existing = await self._employee_repo.get_by_email(request.email)
+        if existing:
+            raise ConflictError(f"Email '{request.email}' is already registered")
+
+        employee = Employee.create(request.first_name, request.last_name, request.email)
+        saved = await self._employee_repo.save(employee)
+        return EmployeeResponse.model_validate(saved)
+```
+
+---
+
+## 6. Pydantic v2 Schemas
+
+```python
+# application/schemas/employee.py
+from datetime import datetime
+from uuid import UUID
+from pydantic import BaseModel, EmailStr, Field, model_validator
+
+
+class CreateEmployeeRequest(BaseModel):
+    first_name: str = Field(min_length=1, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    email: EmailStr
+
+    @model_validator(mode="after")
+    def strip_whitespace(self) -> "CreateEmployeeRequest":
+        self.first_name = self.first_name.strip()
+        self.last_name = self.last_name.strip()
+        return self
+
+
+class EmployeeResponse(BaseModel):
+    id: UUID
+    first_name: str
+    last_name: str
+    email: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class EmployeeListResponse(BaseModel):
+    data: list[EmployeeResponse]
+    meta: dict
+```
+
+**Pydantic v2 rules:**
+- Use `model_dump()` instead of deprecated `dict()`
+- Use `model_validate()` instead of deprecated `from_orm()`
+- Use `model_config = {"from_attributes": True}` instead of deprecated `orm_mode = True`
+- Use `@model_validator(mode="after")` for cross-field validation
+- Use `@field_validator` for single-field validation
+
+---
+
+## 7. FastAPI Router Pattern
+
+Routers are thin — parse request, call use case, format response.
+
+```python
+# presentation/routers/employees.py
+from uuid import UUID
+from fastapi import APIRouter, Depends, Query, status
+from src.application.schemas.employee import CreateEmployeeRequest, EmployeeResponse, EmployeeListResponse
+from src.presentation.deps import get_employee_use_cases, get_current_user
+
+router = APIRouter(prefix="/api/v1/employees", tags=["employees"])
+
+
+@router.post("", response_model=EmployeeResponse, status_code=status.HTTP_201_CREATED)
+async def create_employee(
+    data: CreateEmployeeRequest,
+    use_cases=Depends(get_employee_use_cases),
+    _user=Depends(get_current_user),
+):
+    return await use_cases.create.execute(data)
+
+
+@router.get("/{employee_id}", response_model=EmployeeResponse)
+async def get_employee(
+    employee_id: UUID,
+    use_cases=Depends(get_employee_use_cases),
+    _user=Depends(get_current_user),
+):
+    return await use_cases.get_by_id.execute(employee_id)
+
+
+@router.get("", response_model=EmployeeListResponse)
+async def list_employees(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    use_cases=Depends(get_employee_use_cases),
+    _user=Depends(get_current_user),
+):
+    return await use_cases.list.execute(offset, limit)
+```
+
+### Lifespan for startup/shutdown
+
+```python
+# presentation/main.py
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from src.infrastructure.database.session import engine
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    yield
+    # Shutdown
+    await engine.dispose()
+
+
+app = FastAPI(title="My API", lifespan=lifespan)
+app.include_router(employees_router)
+```
+
+---
+
+## 8. Dependency Injection
+
+```python
+# presentation/deps.py
+from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.infrastructure.database.session import get_session
+from src.infrastructure.database.repositories.employee_repository import EmployeeRepository
+from src.application.use_cases.create_employee import CreateEmployeeUseCase
+
+
+async def get_employee_repo(session: AsyncSession = Depends(get_session)) -> EmployeeRepository:
+    return EmployeeRepository(session)
+
+
+async def get_create_employee_use_case(
+    repo: EmployeeRepository = Depends(get_employee_repo),
+) -> CreateEmployeeUseCase:
+    return CreateEmployeeUseCase(repo)
+```
+
+---
+
+## 9. Error Handling
+
+```python
+# domain/exceptions.py
+class DomainError(Exception):
+    """Base class for all domain errors."""
+
+class NotFoundError(DomainError):
+    def __init__(self, resource: str, id: object) -> None:
+        super().__init__(f"{resource} with id '{id}' was not found")
+        self.resource = resource
+        self.id = id
+
+class ConflictError(DomainError):
+    pass
+
+class ValidationError(DomainError):
+    pass
+
+class ForbiddenError(DomainError):
+    pass
+```
+
+```python
+# presentation/exception_handlers.py
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from src.domain.exceptions import NotFoundError, ConflictError, ValidationError, ForbiddenError
+import structlog
+
+logger = structlog.get_logger()
+
+
+async def not_found_handler(request: Request, exc: NotFoundError) -> JSONResponse:
+    logger.warning("not_found", resource=exc.resource, id=exc.id, path=request.url.path)
+    return JSONResponse(status_code=404, content={"detail": str(exc), "code": "NOT_FOUND"})
+
+
+async def conflict_handler(request: Request, exc: ConflictError) -> JSONResponse:
+    logger.warning("conflict", detail=str(exc))
+    return JSONResponse(status_code=409, content={"detail": str(exc), "code": "CONFLICT"})
+
+
+# Register in main.py:
+# app.add_exception_handler(NotFoundError, not_found_handler)
+# app.add_exception_handler(ConflictError, conflict_handler)
+```
+
+HTTP status mapping:
+
+| Situation | Code |
+|---|---|
+| Success GET/PUT/PATCH | 200 |
+| Created POST | 201 |
+| No content DELETE | 204 |
+| Validation error | 400 |
+| Unauthorized | 401 |
+| Forbidden | 403 |
+| Not found | 404 |
+| Conflict (duplicate) | 409 |
+| Server error | 500 |
+
+---
+
+## 10. Configuration (pydantic-settings)
+
+```python
+# infrastructure/config.py
+from pydantic import PostgresDsn, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    DATABASE_URL: PostgresDsn
+    SECRET_KEY: str
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    CORS_ORIGINS: list[str] = ["http://localhost:3000"]
+    DEBUG: bool = False
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+
+settings = Settings()  # Fails fast at import if required vars are missing
+```
+
+All config via environment variables. Never hardcode secrets. Commit `.env.example` with placeholder values. Never commit `.env`.
+
+---
+
+## 11. Testing Standards
+
+### Coverage threshold: 80%
+
+### Test file naming and location
+
+```
+tests/
+├── conftest.py                          # Fixtures: async client, DB session, factories
+├── unit/
+│   ├── test_create_employee_use_case.py
+│   └── test_employee_entity.py
+└── integration/
+    └── test_employees_api.py
+```
+
+### Unit test pattern (pytest + pytest-asyncio)
+
+```python
+# tests/unit/test_create_employee_use_case.py
+import pytest
+from unittest.mock import AsyncMock
+from src.application.use_cases.create_employee import CreateEmployeeUseCase
+from src.application.schemas.employee import CreateEmployeeRequest
+from src.domain.exceptions import ConflictError
+
+
+@pytest.mark.asyncio
+async def test_create_employee_succeeds_with_valid_data():
+    # Arrange
+    repo = AsyncMock()
+    repo.get_by_email.return_value = None
+    repo.save.side_effect = lambda e: e
+    use_case = CreateEmployeeUseCase(repo)
+
+    # Act
+    result = await use_case.execute(
+        CreateEmployeeRequest(first_name="Jane", last_name="Doe", email="jane@example.com")
+    )
+
+    # Assert
+    assert result.email == "jane@example.com"
+    repo.save.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_create_employee_raises_conflict_when_email_exists():
+    # Arrange
+    repo = AsyncMock()
+    repo.get_by_email.return_value = object()  # Simulate existing employee
+    use_case = CreateEmployeeUseCase(repo)
+
+    # Act & Assert
+    with pytest.raises(ConflictError, match="jane@example.com"):
+        await use_case.execute(
+            CreateEmployeeRequest(first_name="Jane", last_name="Doe", email="jane@example.com")
+        )
+```
+
+### Integration test pattern (httpx AsyncClient)
+
+```python
+# tests/integration/test_employees_api.py
+import pytest
+from httpx import AsyncClient
+
+
+@pytest.mark.asyncio
+async def test_create_employee_returns_201(client: AsyncClient, auth_headers: dict):
+    response = await client.post(
+        "/api/v1/employees",
+        json={"first_name": "Jane", "last_name": "Doe", "email": "jane@example.com"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 201
+    assert response.json()["email"] == "jane@example.com"
+
+
+@pytest.mark.asyncio
+async def test_create_employee_returns_409_when_email_exists(client: AsyncClient, auth_headers: dict):
+    payload = {"first_name": "Jane", "last_name": "Doe", "email": "jane@example.com"}
+    await client.post("/api/v1/employees", json=payload, headers=auth_headers)
+    response = await client.post("/api/v1/employees", json=payload, headers=auth_headers)
+    assert response.status_code == 409
+```
+
+### Fixtures (conftest.py)
+
+```python
+# tests/conftest.py
+import pytest_asyncio
+from httpx import AsyncClient, ASGITransport
+from src.presentation.main import app
+from src.infrastructure.database.session import get_session
+
+@pytest_asyncio.fixture
+async def client(session):
+    app.dependency_overrides[get_session] = lambda: session
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        yield c
+    app.dependency_overrides.clear()
+```
+
+### Required test categories per feature
+
+1. Happy path — valid inputs, expected output
+2. Validation errors — missing/invalid fields (422)
+3. Not found — entity doesn't exist (404)
+4. Conflicts — duplicate data (409)
+5. Server errors — repository failure (500)
+6. Auth — unauthenticated request (401)
+
+---
+
+## 12. Type Hints
+
+- **Strict type hints throughout** — run `mypy src/ --strict`
+- Use `Protocol` for interfaces (not ABC) — structural subtyping is idiomatic Python
+- Use `TypeVar` for generic repositories and use cases
+- Use `from __future__ import annotations` for forward references
+- Use `X | None` syntax (Python 3.10+) instead of `Optional[X]`
+- Never use `Any` — use `object` or a Protocol instead
+
+```python
+# Protocols for interfaces (not ABC)
+from typing import Protocol, TypeVar
+
+T = TypeVar("T")
+
+class Repository(Protocol[T]):
+    async def get_by_id(self, id: object) -> T | None: ...
+    async def save(self, entity: T) -> T: ...
+```
+
+---
+
+## 13. Naming Conventions (Python)
+
+| Element | Convention | Example |
+|---|---|---|
+| Variables, functions, methods | snake_case | `find_by_email`, `is_active`, `employee_id` |
+| Classes | PascalCase | `EmployeeService`, `CreateEmployeeUseCase` |
+| Constants | SCREAMING_SNAKE_CASE | `MAX_PAGE_SIZE`, `DEFAULT_TIMEOUT_SECONDS` |
+| Modules / files | snake_case | `employee_service.py`, `create_employee.py` |
+| Private attributes | leading underscore | `_session`, `_repo` |
+
+---
+
+## 14. Security
+
+- **No hard-coded secrets** — always use `pydantic-settings` + `.env` + env vars
+- Use `OAuth2PasswordBearer` + JWT for authentication
+- Store tokens in `Authorization: Bearer` header — never in cookies or query strings (unless required by spec)
+- Validate all inputs via Pydantic schemas (automatic with FastAPI)
+- Rate limit public endpoints with `slowapi` or custom middleware
+- Never log passwords, tokens, or PII
+- CORS configured explicitly — no wildcard `*` in production
+
+---
+
+## 15. Logging
+
+```python
+# infrastructure/logging.py
+import structlog
+
+structlog.configure(
+    processors=[
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer(),
+    ]
+)
+
+logger = structlog.get_logger()
+
+# Usage in use cases / services:
+logger.info("employee_created", employee_id=str(employee.id), email=employee.email)
+logger.error("database_error", error=str(exc), operation="save_employee")
+```
+
+Never use `print()` in production code. Use structured logging (structlog).
+
+---
+
+## 16. Development Scripts
+
+```bash
+uvicorn src.presentation.main:app --reload   # Dev server
+pytest                                       # All tests
+pytest --cov=src --cov-fail-under=80        # Tests + coverage
+mypy src/ --strict                           # Type check
+ruff check .                                 # Lint
+ruff format .                                # Format
+ruff check . --fix                           # Auto-fix
+alembic revision --autogenerate -m "msg"    # Create migration
+alembic upgrade head                         # Apply migrations
+```
+
+---
+
+## Anti-Patterns
+
+These patterns are **never acceptable**. The AI MUST reject, refactor, or flag them when encountered.
+
+| Pattern | Why | Fix |
+|---|---|---|
+| `.dict()` on Pydantic v2 models | Deprecated in v2; will be removed | `.model_dump()` |
+| Business logic in FastAPI route functions | Untestable without HTTP setup | Move to application service / use case |
+| Mixing sync and async functions in the same call chain | Blocks the event loop | Keep async throughout; use `asyncio.to_thread` for sync I/O |
+| `except Exception: pass` | Silent failures; impossible to debug | Log with `logger.exception(...)`, re-raise or map |
+| SQLAlchemy `session.execute()` without `await` in async mode | Blocks event loop | `await session.execute(...)` |
+| Hardcoded credentials or DSNs | Config leaks; breaks env portability | `pydantic-settings` with env vars |
+| `response_model=None` on endpoints that return data | No schema validation or OpenAPI docs | Always define `response_model` |
+| Bare `raise` in FastAPI route without `HTTPException` | Returns 500 with raw traceback | Raise `HTTPException` or use global exception handler |

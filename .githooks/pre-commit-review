@@ -1,0 +1,264 @@
+#!/usr/bin/env bash
+# pre-commit-review — semantic AI review of staged diff before commit
+#
+# Enabled only when autonomy.review_on_commit: true in .hive/AGENTS.local.md.
+# Default: disabled (false). Zero LLM tokens when disabled.
+#
+# Skip entirely: HIVE_SKIP_HOOKS=1 git commit ...
+
+set -euo pipefail
+
+# ── Fast exit paths ───────────────────────────────────────────────────────────
+[[ "${HIVE_SKIP_HOOKS:-}" == "1" ]] && exit 0
+
+HIVE_CONFIG=".hive/AGENTS.local.md"
+[[ ! -f "$HIVE_CONFIG" ]] && exit 0
+
+# ── Read autonomy config ──────────────────────────────────────────────────────
+# sed replaces grep -oP (\K not available in BSD grep on macOS)
+REVIEW_ENABLED=$(sed -n 's/^[[:space:]]*review_on_commit:[[:space:]]*\([^[:space:]"#][^#]*\)/\1/p' "$HIVE_CONFIG" 2>/dev/null | head -1 | tr -d '[:space:]' || echo "false")
+[[ -z "$REVIEW_ENABLED" ]] && REVIEW_ENABLED="false"
+[[ "$REVIEW_ENABLED" != "true" ]] && exit 0
+
+AI_CLI=$(sed -n 's/^[[:space:]]*ai_cli:[[:space:]]*"\([^"]*\)".*/\1/p' "$HIVE_CONFIG" 2>/dev/null | head -1 || echo "none")
+[[ -z "$AI_CLI" || "$AI_CLI" == "none" ]] && exit 0
+
+# ── Colors ────────────────────────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+
+echo -e "${CYAN}[pre-commit-review]${NC} Semantic review starting..."
+
+# ── sha256 utility ────────────────────────────────────────────────────────────
+if command -v sha256sum &>/dev/null; then
+    sha256_cmd() { sha256sum | cut -c1-64; }
+elif command -v shasum &>/dev/null; then
+    sha256_cmd() { shasum -a 256 | cut -c1-64; }
+else
+    echo -e "${YELLOW}[pre-commit-review]${NC} No sha256 utility found — skipping review" >&2
+    exit 0
+fi
+
+# ── Cache paths ───────────────────────────────────────────────────────────────
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+PROJECT_HASH=$(printf '%s' "$PROJECT_ROOT" | sha256_cmd | cut -c1-16)
+CACHE_DIR="${HOME}/.cache/hive/${PROJECT_HASH}"
+CACHE_FILES_DIR="${CACHE_DIR}/files"
+CACHE_META_FILE="${CACHE_DIR}/metadata"
+mkdir -p "$CACHE_FILES_DIR"
+
+# ── Standards cache invalidation ─────────────────────────────────────────────
+CORE_MDC="${PROJECT_ROOT}/.hive/standards/core.mdc"
+STANDARDS_HASH=""
+if [[ -f "$CORE_MDC" ]]; then
+    STANDARDS_HASH=$(cat "$CORE_MDC" | sha256_cmd)
+fi
+
+# Detect stack standard file (frontend or backend) to include in hash
+STACK_STANDARD_FILE=""
+STAGED_FILES_ALL=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
+
+if printf '%s\n' "$STAGED_FILES_ALL" | grep -qE '\.(ts|tsx|js|jsx|vue)$'; then
+    [[ -f "${PROJECT_ROOT}/.hive/standards/frontend.mdc" ]] && STACK_STANDARD_FILE="${PROJECT_ROOT}/.hive/standards/frontend.mdc"
+fi
+if printf '%s\n' "$STAGED_FILES_ALL" | grep -qE '\.(go|py|java|cs|rb)$'; then
+    [[ -f "${PROJECT_ROOT}/.hive/standards/backend.mdc" ]] && STACK_STANDARD_FILE="${PROJECT_ROOT}/.hive/standards/backend.mdc"
+fi
+
+if [[ -n "$STACK_STANDARD_FILE" && -f "$STACK_STANDARD_FILE" ]]; then
+    STACK_HASH=$(cat "$STACK_STANDARD_FILE" | sha256_cmd)
+    STANDARDS_HASH="${STANDARDS_HASH}${STACK_HASH}"
+fi
+
+COMBINED_STANDARDS_HASH=$(printf '%s' "$STANDARDS_HASH" | sha256_cmd 2>/dev/null || echo "unknown")
+
+# If standards changed, clear all file caches
+if [[ -f "$CACHE_META_FILE" ]]; then
+    CACHED_STANDARDS_HASH=$(cat "$CACHE_META_FILE" 2>/dev/null || echo "")
+    if [[ "$CACHED_STANDARDS_HASH" != "$COMBINED_STANDARDS_HASH" ]]; then
+        rm -f "${CACHE_FILES_DIR}"/*
+        echo -e "${CYAN}[pre-commit-review]${NC} Standards changed — invalidating cache"
+    fi
+fi
+printf '%s' "$COMBINED_STANDARDS_HASH" > "$CACHE_META_FILE"
+
+# ── File list and cache check ─────────────────────────────────────────────────
+if [[ -z "$STAGED_FILES_ALL" ]]; then
+    exit 0
+fi
+
+declare -a UNCACHED_FILES=()
+
+while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+    FILE_CONTENT=$(git show ":${file}" 2>/dev/null || true)
+    if [[ -z "$FILE_CONTENT" ]]; then
+        continue
+    fi
+    FILE_SHA=$(printf '%s' "$FILE_CONTENT" | sha256_cmd)
+    CACHE_ENTRY="${CACHE_FILES_DIR}/${FILE_SHA}"
+    if [[ ! -f "$CACHE_ENTRY" ]]; then
+        UNCACHED_FILES+=("$file")
+    fi
+done <<< "$STAGED_FILES_ALL"
+
+# All files cached
+if [[ ${#UNCACHED_FILES[@]} -eq 0 ]]; then
+    echo -e "${GREEN}[pre-commit-review]${NC} All staged files passed review (cached)"
+    exit 0
+fi
+
+# ── Build diff of uncached files only ────────────────────────────────────────
+STAGED_DIFF=$(git diff --cached -U5 -- "${UNCACHED_FILES[@]}" 2>/dev/null || true)
+
+if [[ -z "$STAGED_DIFF" ]]; then
+    echo -e "${YELLOW}[pre-commit-review]${NC} No diff available — skipping review"
+    exit 0
+fi
+
+# ── Load standards content ────────────────────────────────────────────────────
+CORE_MDC_CONTENT=""
+[[ -f "$CORE_MDC" ]] && CORE_MDC_CONTENT=$(cat "$CORE_MDC")
+
+STACK_STANDARD_CONTENT=""
+[[ -n "$STACK_STANDARD_FILE" && -f "$STACK_STANDARD_FILE" ]] && STACK_STANDARD_CONTENT=$(cat "$STACK_STANDARD_FILE")
+
+STANDARDS_BLOCK="${CORE_MDC_CONTENT}"
+[[ -n "$STACK_STANDARD_CONTENT" ]] && STANDARDS_BLOCK="${STANDARDS_BLOCK}
+
+${STACK_STANDARD_CONTENT}"
+
+# ── Build prompt ──────────────────────────────────────────────────────────────
+PROMPT="You are a code reviewer. Review ONLY the changed lines in the diff below.
+Validate them against the provided standards.
+
+=== STANDARDS ===
+${STANDARDS_BLOCK}
+=== END STANDARDS ===
+
+=== STAGED DIFF ===
+${STAGED_DIFF}
+=== END DIFF ===
+
+Respond ONLY with:
+STATUS: PASSED
+or
+STATUS: FAILED
+<list of violations: file, line, rule, suggested fix>
+
+Begin your response with STATUS:"
+
+# ── AI CLI dispatch ───────────────────────────────────────────────────────────
+AI_RESPONSE=""
+CLI_BASE="${AI_CLI%%:*}"
+
+run_with_timeout() {
+    local timeout_secs=120
+    local cmd_pid
+
+    # Subshell so we can background it
+    (
+        case "$AI_CLI" in
+            claude)
+                printf '%s' "$PROMPT" | claude --print 2>&1
+                ;;
+            gemini)
+                gemini -p "$PROMPT" 2>&1
+                ;;
+            codex)
+                codex exec "$PROMPT" 2>&1
+                ;;
+            ollama:*)
+                OLLAMA_MODEL="${AI_CLI#ollama:}"
+                # Escape prompt for JSON
+                ESCAPED_PROMPT=$(printf '%s' "$PROMPT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null \
+                    || printf '%s' "$PROMPT" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/g' | tr -d '\n' | sed 's/\\n$//')
+                curl -s --max-time 120 \
+                    -X POST http://localhost:11434/api/generate \
+                    -H 'Content-Type: application/json' \
+                    -d "{\"model\": \"${OLLAMA_MODEL}\", \"prompt\": ${ESCAPED_PROMPT}, \"stream\": false}" \
+                    2>&1 | python3 -c "import sys,json; data=json.load(sys.stdin); print(data.get('response',''))" 2>/dev/null \
+                    || printf '%s' ""
+                ;;
+            *)
+                echo "HIVE_WARN: Unknown ai_cli value: ${AI_CLI}" >&2
+                exit 2
+                ;;
+        esac
+    ) &
+    cmd_pid=$!
+
+    local elapsed=0
+    local interval=1
+    while kill -0 "$cmd_pid" 2>/dev/null; do
+        sleep $interval
+        elapsed=$((elapsed + interval))
+        if [[ $elapsed -ge $timeout_secs ]]; then
+            kill "$cmd_pid" 2>/dev/null || true
+            wait "$cmd_pid" 2>/dev/null || true
+            echo -e "${YELLOW}[pre-commit-review]${NC} Review timed out after ${timeout_secs}s — commit allowed (fail open)" >&2
+            exit 0
+        fi
+    done
+    wait "$cmd_pid"
+    return $?
+}
+
+# Check for unknown CLI before running
+case "$CLI_BASE" in
+    claude|gemini|codex|ollama) : ;;
+    *)
+        echo -e "${YELLOW}[pre-commit-review]${NC} Unknown ai_cli '${AI_CLI}' — skipping review (commit allowed)" >&2
+        exit 0
+        ;;
+esac
+
+# Verify CLI is installed (skip for ollama — it uses REST)
+if [[ "$CLI_BASE" != "ollama" ]]; then
+    if ! command -v "$CLI_BASE" &>/dev/null; then
+        echo -e "${YELLOW}[pre-commit-review]${NC} '${CLI_BASE}' not found in PATH — skipping review (commit allowed)" >&2
+        exit 0
+    fi
+fi
+
+echo -e "${CYAN}[pre-commit-review]${NC} Reviewing ${#UNCACHED_FILES[@]} file(s) via ${AI_CLI}..."
+
+# Capture output; exit code 2 means unknown CLI (already handled above)
+AI_RESPONSE=$(run_with_timeout 2>&1) || {
+    local_exit=$?
+    if [[ $local_exit -eq 0 ]]; then
+        : # timeout already handled with exit 0
+    fi
+    # For any other non-zero exit, fail open
+    echo -e "${YELLOW}[pre-commit-review]${NC} AI CLI exited with error — commit allowed (fail open)" >&2
+    exit 0
+}
+
+# ── Parse response ────────────────────────────────────────────────────────────
+FIRST_LINES=$(printf '%s\n' "$AI_RESPONSE" | head -20)
+
+if printf '%s\n' "$FIRST_LINES" | grep -q '^STATUS: PASSED'; then
+    # Cache all reviewed files
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
+        FILE_CONTENT=$(git show ":${file}" 2>/dev/null || true)
+        [[ -z "$FILE_CONTENT" ]] && continue
+        FILE_SHA=$(printf '%s' "$FILE_CONTENT" | sha256_cmd)
+        printf 'PASSED\n' > "${CACHE_FILES_DIR}/${FILE_SHA}"
+    done <<< "$(printf '%s\n' "${UNCACHED_FILES[@]}")"
+
+    echo -e "${GREEN}[pre-commit-review]${NC} Review passed"
+    exit 0
+
+elif printf '%s\n' "$FIRST_LINES" | grep -q '^STATUS: FAILED'; then
+    echo -e "${RED}[pre-commit-review]${NC} Review failed — fix violations before committing:" >&2
+    echo "" >&2
+    printf '%s\n' "$AI_RESPONSE" >&2
+    echo "" >&2
+    echo -e "  ${YELLOW}Tip:${NC} HIVE_SKIP_HOOKS=1 git commit   — bypass for emergency commits" >&2
+    exit 1
+
+else
+    echo -e "${YELLOW}[pre-commit-review]${NC} Could not determine review status — commit allowed (fail open)" >&2
+    echo -e "  Response snippet: $(printf '%s\n' "$AI_RESPONSE" | head -5)" >&2
+    exit 0
+fi

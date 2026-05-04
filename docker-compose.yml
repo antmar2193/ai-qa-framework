@@ -1,0 +1,9 @@
+services:
+  qa-framework:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./qa-config.json:/app/qa-config.json:ro
+      - ./runs:/app/runs
+      - ./qa-reports:/app/qa-reports

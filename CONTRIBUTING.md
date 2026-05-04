@@ -29,8 +29,18 @@ Thank you for your interest in contributing! This guide will help you get starte
 
    ```bash
    pip install -r requirements.txt
+   pip install pytest pytest-asyncio pytest-cov  # dev dependencies
    playwright install chromium
    ```
+
+   > `requirements.txt` is the pinned lockfile. To update or add dependencies, edit
+   > `requirements.in` (prod) or `requirements-dev.in` (dev/test) and regenerate:
+   >
+   > ```bash
+   > pip install pip-tools
+   > pip-compile requirements.in -o requirements.txt
+   > pip-compile requirements-dev.in -o requirements-dev.txt
+   > ```
 
 4. **Set up your environment:**
 

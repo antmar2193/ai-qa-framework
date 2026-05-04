@@ -1,0 +1,303 @@
+# Standards: Core
+> Universal. Language-agnostic. Tool-agnostic. Stack-agnostic.
+> Every project in the factory inherits this.
+> References to specific languages, frameworks, or tools belong ONLY in stack standards.
+
+---
+
+## 1. Language Rules
+
+### Code — Always English (no exceptions)
+- Variable names, function names, class names, type names, enum values
+- Comments and inline documentation
+- Error messages, log messages, exception messages
+- Database table names, column names, migration file names
+- Configuration keys and environment variable names
+- Test names and test file descriptions
+
+### Technical documentation — Always English
+- PRD, ARCHITECTURE, SPEC, api-spec, data-model, ADRs
+- README, guides, runbooks, changelogs
+
+### Communication — Configurable per project
+Read `language.communication` from `.hive/AGENTS.local.md`.
+Use that language for:
+- Agent responses in chat
+- Commit messages, PR titles and descriptions
+- Ticket descriptions and acceptance criteria
+- Script menus and interactive prompts
+
+When communication language is Spanish, always use **neutral Spanish** (no regional expressions).
+
+---
+
+## 2. Naming Conventions
+
+| Artifact | Convention | Example |
+|---|---|---|
+| Classes, types, interfaces | PascalCase | `EmployeeService`, `OrderRepository` |
+| Functions, methods, variables | camelCase | `findByEmail`, `isActive` |
+| Constants | UPPER_SNAKE_CASE | `MAX_RETRIES`, `DEFAULT_PAGE_SIZE` |
+| Files — class/component | PascalCase | `EmployeeService.ts`, `PositionCard.tsx` |
+| Files — utility/config | camelCase | `dateUtils.ts`, `appConfig.py` |
+| Directories | kebab-case | `employee-service/`, `order-management/` |
+| Environment variables | UPPER_SNAKE_CASE | `DATABASE_URL`, `API_SECRET_KEY` |
+
+**Notes:**
+- Some languages have established conventions that differ (e.g. Python uses `snake_case` for functions/variables). In those cases, **follow the language convention** for code, but apply the above for files, directories, env vars, and all non-code artifacts.
+- Boolean names: `is*`, `has*`, `can*`, `should*` — never bare adjectives
+- Collection names: plural noun (`employees`, `orders`) — never `list`, `data`, `stuff`
+- Functions: verb + noun (`createEmployee`, `validateEmail`, `find_by_email`)
+
+---
+
+## 3. Git Workflow
+
+### Branch naming
+Read the pattern from `.hive/AGENTS.local.md → vcs.branch_pattern`.
+
+Default pattern if not configured:
+```
+feature/<ticket-id>-<short-description>
+bugfix/<ticket-id>-<short-description>
+hotfix/<ticket-id>-<short-description>
+test/<ticket-id>-<short-description>
+chore/<short-description>
+```
+
+When working on a ticket that has both backend and frontend work, append the area to avoid branch conflicts:
+```
+feature/<ticket-id>-<description>-backend
+feature/<ticket-id>-<description>-frontend
+```
+
+### Branching rules (strict)
+
+Read `vcs.default_base_branch` from `.hive/AGENTS.local.md` — that is the integration branch for this project.
+
+| Rule | Detail |
+|---|---|
+| Branch origin | Always from `vcs.default_base_branch` (never from another feature branch) |
+| PR target | Always `vcs.default_base_branch` |
+| `vcs.default_base_branch` → `main` | Manual by the dev team (the agent NEVER merges to main) |
+| Dependency exception | If ticket B depends on unmerged ticket A, branch B from A's branch. Rebase to `vcs.default_base_branch` once A is merged |
+
+### Pre-check before starting a new ticket
+Before creating a new feature branch:
+1. Check if there is an open PR from the previous ticket
+2. If the PR exists and is approved → notify the user to merge it first
+3. If the PR was already merged → verify the remote branch was deleted
+4. If the remote branch was deleted → delete the local branch
+5. Pull latest `vcs.default_base_branch` before creating the new branch
+
+### Protected branches
+- `main` (or `master`) — production only, never commit directly
+- `vcs.default_base_branch` — integration branch, CI always green
+
+### Commit format (Conventional Commits)
+```
+<type>(<scope>): <description>
+
+[optional body — why this change was made]
+
+Refs: <ticket-id>
+```
+
+Types: `feat` `fix` `test` `refactor` `docs` `chore` `perf` `style`
+- Description: imperative mood, lowercase, no period, ≤ 72 chars
+- Body: explains WHY (the diff shows what)
+- Always reference the ticket ID
+- Language: use `language.communication` from AGENTS.local.md
+
+### PR / MR rules
+- Title: `[<ticket-id>] type: description`
+- Body: written in `language.communication` from AGENTS.local.md
+- Every PR references a ticket
+- Every PR targets `vcs.default_base_branch` (never `main`)
+- Use the CLI tool configured in `AGENTS.local.md → vcs.pr_tool`
+- If `pr_tool` is null → instruct the user to open the PR manually
+- CI must be green before merge
+
+### Post-merge cleanup (full workflow)
+
+The complete Git cycle for a ticket is:
+
+```
+1. git checkout <vcs.default_base_branch> && git pull
+2. git checkout -b <branch>          # branch from vcs.branch_pattern
+3. [implement + commit + push]
+4. Create PR → target: vcs.default_base_branch
+5. Merge PR (human or auto per autonomy level)
+6. Delete ticket branch (remote + local)
+7. git checkout <vcs.default_base_branch> && git pull
+```
+
+Steps 5–7 are automated only in `autonomous` mode with `auto_merge_pr: true`.
+In `supervised` and `balanced` mode the human performs steps 5–7 manually.
+
+---
+
+## 4. Code Quality (language-agnostic)
+
+| Rule | Target |
+|---|---|
+| Function length | ≤ 20 lines |
+| Function parameters | ≤ 3 (use parameter objects beyond this) |
+| Nesting depth | ≤ 2 levels (use early returns to flatten) |
+| File length | ≤ 200 lines (split by responsibility) |
+| Magic values | Forbidden — extract to named constants |
+| Flag parameters | Forbidden — split into two named functions |
+| Dead code | Forbidden — no commented-out blocks |
+| TODO comments | Forbidden in committed code — create a ticket instead |
+
+---
+
+## 5. Error Handling
+
+Every error must be:
+- **Caught** at the appropriate boundary
+- **Logged** with context (operation name, input that caused it)
+- **Surfaced** to the caller in a typed, structured form
+- **Human-readable** — message enables diagnosis without reading source code
+
+Empty catch blocks are forbidden. Silent failures are forbidden.
+
+Pattern (pseudocode — adapt to the project's language):
+```
+try:
+    result = do_operation(input)
+catch error:
+    logger.error("operation_name failed", context={input, error})
+    raise DomainError("OPERATION_FAILED", "Human-readable message", cause=error)
+```
+
+---
+
+## 6. TDD Rules
+
+Order is mandatory:
+1. Write a failing test describing the expected behavior
+2. Run it — confirm it fails for the right reason
+3. Write the minimum code to make it pass
+4. Refactor without breaking the test
+
+Test naming: plain English, reads as a specification.
+```
+"rejects duplicate email on employee registration"
+"returns 404 when the position does not exist"
+"emits EmployeeCreated event after successful creation"
+```
+
+---
+
+## 7. Verification Before Commit
+
+Read the commands from `.hive/AGENTS.local.md → verify_commands`. Run each one in order. If a command is `null`, skip it.
+
+```
+1. verify_commands.test        # tests must pass
+2. verify_commands.typecheck   # zero type errors (skip if null)
+3. verify_commands.lint        # zero warnings (skip if null)
+```
+
+Do not commit if any command fails. Fix the issue first.
+
+---
+
+## 8. Documentation Lifecycle
+
+Before every commit or PR, identify which docs are affected:
+
+| Changed | Update this |
+|---|---|
+| Data model / DB schema | `.hive/specs/data-model.md` |
+| API endpoints | `.hive/specs/api-spec.yml` (or equivalent) |
+| New library or dependency | Relevant `.hive/standards/<area>.md` |
+| Config / env vars / setup | `README.md` and/or `development_guide.md` |
+| Architecture decision | New ADR in `docs/adr/` |
+| Test patterns | Standards doc for the affected area |
+
+Update in the same commit or PR — not later.
+
+---
+
+## 9. Configuration & Secrets
+
+- All configuration via environment variables — never hardcoded
+- Template file (e.g. `.env.example`) committed with all keys and placeholder values
+- Actual secrets file never committed (in `.gitignore` / `.dockerignore`)
+- Secrets never appear in logs, errors, or API responses
+- All env vars documented in README
+
+---
+
+## 10. Ticket Workflow
+
+All ticket operations use the tool and status names from `.hive/AGENTS.local.md`.
+
+When a command needs to:
+- **Read a ticket** → use `ticket_provider.mcp_name` MCP, or fallback per `fallbacks.ticket_unavailable`
+- **Move a ticket** → use the exact status name from `ticket_provider.statuses.*`
+- **Reference a ticket** → use the format from `ticket_provider.id_format`
+
+If the configured MCP is unavailable:
+1. Check `fallbacks.ticket_unavailable` in `AGENTS.local.md`
+2. If `"ask"` → show the user the `fallbacks.ticket_paste_format` template and wait
+3. If `"file"` → read from `.hive/changes/<ticket-id>_context.md`
+4. If `"skip"` → proceed without ticket context, note the limitation
+
+---
+
+## Event Logging — events.jsonl
+
+All agents write to `.hive/events.jsonl` (append-only, one JSON object per line).
+
+### Schema
+
+Every event must include these base fields:
+
+```jsonl
+{
+  "ts": "<ISO-8601 timestamp>",
+  "cmd": "<command that triggered this: /ship | /enrich | /plan-be | etc>",
+  "ticket": "<ticket ID or null>",
+  "stage": "<stage name: enrich | plan-be | tdd | dev-be | commit | etc>",
+  "status": "<complete | failed | started | checkpoint>",
+  "duration_s": <seconds as number, or null if not applicable>
+}
+```
+
+### Extended fields (add when relevant)
+
+```jsonl
+{
+  "tokens": <token count for this stage>,
+  "event": "<action | decision | file_created | file_modified | test_run | commit | pr_created>",
+  "detail": "<human-readable description of what happened>",
+  "error": "<error message if status=failed>"
+}
+```
+
+### Rules
+- **Append-only** — never modify existing lines
+- **One event per line** — valid JSON, no multi-line
+- **Always write on stage complete AND stage start**
+- **In autonomous mode**: write an event for every significant action (see orchestrator.md)
+- **Tracked in git** — the whole team shares this file; it is the shared activity log of the project
+- **Schema is stable** — adding fields is allowed; removing or renaming existing fields is a breaking change
+
+---
+
+## Anti-Patterns
+
+These patterns are **never acceptable**. The AI MUST reject, refactor, or flag them when encountered.
+
+| Pattern | Why | Fix |
+|---|---|---|
+| Business logic in transport layer (controller/handler/route) | Violates SRP; untestable without HTTP | Move to use case / application service |
+| Direct cross-domain data access (Service A queries Service B's DB) | Breaks DDD bounded context isolation | Expose a domain event or API contract |
+| Hardcoded environment values in source code | Config leaks; breaks multi-env | Read from env vars; fail fast on startup |
+| Skipping the failing test before implementation | Defeats TDD purpose; no coverage guarantee | Write failing test first, then implement |
+| `TODO` / `FIXME` committed to production paths | Tech debt that compounds | Either fix now or create a ticket |
+| Catching all exceptions silently (`except: pass`, `catch {}`) | Swallows real errors; invisible failures | Log with context, rethrow or map to domain error |
+| Magic numbers or strings inline | Unreadable; change in one place breaks others | Named constant or config value |

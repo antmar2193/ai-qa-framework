@@ -1,0 +1,15 @@
+# Direct dependencies — source of truth for pip-compile
+# Run: pip-compile requirements.in -o requirements.txt
+# To upgrade: pip-compile requirements.in --upgrade -o requirements.txt
+
+playwright>=1.40.0
+anthropic>=0.39.0
+pydantic>=2.5.0
+click>=8.1.0
+jinja2>=3.1.0
+Pillow>=10.0.0
+aiofiles>=23.0.0
+rich>=13.0.0
+fastapi>=0.110.0
+uvicorn>=0.27.0
+openpyxl>=3.1.0

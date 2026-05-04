@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# prepare-commit-msg — inject Refs: trailer from branch name (0 LLM tokens)
+# Extracts ticket ID from branch names like: feature/PROJ-123-desc  fix/ABC-456
+
+[[ "${HIVE_SKIP_HOOKS:-}" == "1" ]] && exit 0
+
+COMMIT_FILE="$1"
+COMMIT_SOURCE="${2:-}"
+
+# Only inject for fresh commits (not merge, squash, or amend)
+case "$COMMIT_SOURCE" in
+    merge|squash|commit) exit 0 ;;
+esac
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+[[ -z "$BRANCH" || "$BRANCH" == "HEAD" ]] && exit 0
+
+# Extract first ticket ID pattern: UPPER-digits  (e.g. PROJ-123, ABC-456)
+TICKET_ID=$(echo "$BRANCH" | grep -oE '[A-Z]+-[0-9]+' | head -1 || echo "")
+[[ -z "$TICKET_ID" ]] && exit 0
+
+# Skip if Refs: trailer already present
+grep -q "^Refs:" "$COMMIT_FILE" 2>/dev/null && exit 0
+
+# Append trailer (blank line separator if file does not already end with one)
+LAST_LINE=$(tail -1 "$COMMIT_FILE")
+[[ -n "$LAST_LINE" ]] && echo "" >> "$COMMIT_FILE"
+echo "Refs: ${TICKET_ID}" >> "$COMMIT_FILE"
+
+exit 0

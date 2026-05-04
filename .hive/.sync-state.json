@@ -1,0 +1,286 @@
+{
+  "files": {
+    ".hive/scripts/hive-backup.sh": {
+      "fh": "4c3b5e3a6e64a5d4",
+      "ph": "4c3b5e3a6e64a5d4"
+    },
+    ".hive/scripts/hive-approve.sh": {
+      "fh": "470c3da970400ff2",
+      "ph": "470c3da970400ff2"
+    },
+    ".hive/.commands/run.md": {
+      "fh": "109d07a0d2e688bf",
+      "ph": "109d07a0d2e688bf"
+    },
+    ".hive/.commands/judgment-day.md": {
+      "fh": "1ff3c5b7aa18fd97",
+      "ph": "1ff3c5b7aa18fd97"
+    },
+    ".hive/.commands/deploy.md": {
+      "fh": "f8ba6c888b3a6be3",
+      "ph": "f8ba6c888b3a6be3"
+    },
+    ".hive/scripts/hive-notify.sh": {
+      "fh": "05ea3c1ad23c0c01",
+      "ph": "05ea3c1ad23c0c01"
+    },
+    ".hive/.commands/focus.md": {
+      "fh": "c768b4d77c2dddd9",
+      "ph": "c768b4d77c2dddd9"
+    },
+    ".hive/scripts/hive-health.sh": {
+      "fh": "5f9ac27966d14c3b",
+      "ph": "5f9ac27966d14c3b"
+    },
+    ".hive/.commands/sprint-close.md": {
+      "fh": "6d1a15cfcb7d5045",
+      "ph": "6d1a15cfcb7d5045"
+    },
+    ".hive/.commands/generate.md": {
+      "fh": "5712235bb2f63233",
+      "ph": "5712235bb2f63233"
+    },
+    ".cursor/rules/tests-area.mdc": {
+      "fh": "9afddeefc301fd80",
+      "ph": "9afddeefc301fd80"
+    },
+    ".hive/.commands/explain.md": {
+      "fh": "64734eec02cf337d",
+      "ph": "64734eec02cf337d"
+    },
+    ".cursor/rules/frontend-area.mdc": {
+      "fh": "4a755d6e150d6d56",
+      "ph": "4a755d6e150d6d56"
+    },
+    ".hive/.agents/explainer.md": {
+      "fh": "9d3e6e00825ec6fc",
+      "ph": "9d3e6e00825ec6fc"
+    },
+    ".hive/.commands/tdd.md": {
+      "fh": "c01a34123a957dc8",
+      "ph": "c01a34123a957dc8"
+    },
+    ".hive/.commands/intake.md": {
+      "fh": "ec106daba1d4ac9c",
+      "ph": "ec106daba1d4ac9c"
+    },
+    ".hive/.commands/enrich.md": {
+      "fh": "ad00c540ebc89641",
+      "ph": "ad00c540ebc89641"
+    },
+    ".hive/.agents/product-strategist.md": {
+      "fh": "d9668c2165a8d1fe",
+      "ph": "d9668c2165a8d1fe"
+    },
+    ".hive/.commands/strategy.md": {
+      "fh": "8ac8fe5c84173fda",
+      "ph": "8ac8fe5c84173fda"
+    },
+    ".hive/.commands/commit.md": {
+      "fh": "aaf9ee83b3d256b2",
+      "ph": "aaf9ee83b3d256b2"
+    },
+    ".hive/.commands/assess.md": {
+      "fh": "807d0b973ee2b219",
+      "ph": "807d0b973ee2b219"
+    },
+    ".githooks/commit-msg": {
+      "fh": "44372e9f4434a19c",
+      "ph": "44372e9f4434a19c"
+    },
+    ".hive/standards/core.mdc": {
+      "fh": "fe48311abe7ada26",
+      "ph": "fe48311abe7ada26"
+    },
+    ".hive/scripts/hive-run.sh": {
+      "fh": "497f7fc5f20bf6b2",
+      "ph": "497f7fc5f20bf6b2"
+    },
+    ".githooks/install.sh": {
+      "fh": "400e3d951f97a382",
+      "ph": "400e3d951f97a382"
+    },
+    ".hive/.agents/devops.md": {
+      "fh": "f04d9466006576a3",
+      "ph": "f04d9466006576a3"
+    },
+    ".hive/scripts/hive-memory.sh": {
+      "fh": "5f243ff90422057f",
+      "ph": "5f243ff90422057f"
+    },
+    ".hive/.commands/health.md": {
+      "fh": "a6acddb751db9146",
+      "ph": "a6acddb751db9146"
+    },
+    ".hive/.commands/update-docs.md": {
+      "fh": "c5da37461f06047d",
+      "ph": "c5da37461f06047d"
+    },
+    ".hive/scripts/hive-analytics.sh": {
+      "fh": "dc931a30699bd462",
+      "ph": "dc931a30699bd462"
+    },
+    ".hive/scripts/hive-config.sh": {
+      "fh": "ccc8752b1c20f3a6",
+      "ph": "ccc8752b1c20f3a6"
+    },
+    ".hive/.commands/dev-be.md": {
+      "fh": "ce47eff1bb923dd6",
+      "ph": "ce47eff1bb923dd6"
+    },
+    ".hive/.agents/coder.md": {
+      "fh": "9fa4b8a2b17c5443",
+      "ph": "9fa4b8a2b17c5443"
+    },
+    ".hive/scripts/hive-status.sh": {
+      "fh": "c1f4457ef40080a3",
+      "ph": "c1f4457ef40080a3"
+    },
+    ".hive/.commands/resume.md": {
+      "fh": "95d9988082df41c3",
+      "ph": "95d9988082df41c3"
+    },
+    ".hive/.agents/reviewer.md": {
+      "fh": "085da44398588d5c",
+      "ph": "085da44398588d5c"
+    },
+    ".hive/scripts/deliver.sh": {
+      "fh": "d4c2beaaa9b1abb3",
+      "ph": "d4c2beaaa9b1abb3"
+    },
+    ".hive/.commands/dev-fe.md": {
+      "fh": "a98057d683062da6",
+      "ph": "a98057d683062da6"
+    },
+    ".hive/scripts/hive-shell-hook.sh": {
+      "fh": "5f2110d87b55e0b1",
+      "ph": "5f2110d87b55e0b1"
+    },
+    ".hive/.commands/plan-fe.md": {
+      "fh": "8461b115d2af0427",
+      "ph": "8461b115d2af0427"
+    },
+    ".hive/.commands/split.md": {
+      "fh": "8da4d8da23a10fc5",
+      "ph": "8da4d8da23a10fc5"
+    },
+    ".hive/scripts/hive-eval.sh": {
+      "fh": "fcd4ba7e9a61efef",
+      "ph": "fcd4ba7e9a61efef"
+    },
+    ".hive/.commands/profile.md": {
+      "fh": "67f6d043d44a8c1f",
+      "ph": "67f6d043d44a8c1f"
+    },
+    ".hive/.commands/plan-be.md": {
+      "fh": "0f070a16dbbbc5c0",
+      "ph": "0f070a16dbbbc5c0"
+    },
+    ".hive/scripts/hive-watchdog.sh": {
+      "fh": "65cffb885029271f",
+      "ph": "65cffb885029271f"
+    },
+    ".hive/.agents/analyst.md": {
+      "fh": "f9a82ef0bf5c8603",
+      "ph": "f9a82ef0bf5c8603"
+    },
+    ".hive/scripts/hive-ship.sh": {
+      "fh": "f179fff851e2ab75",
+      "ph": "f179fff851e2ab75"
+    },
+    "CLAUDE.md": {
+      "fh": "b39ec48f5de29c7e",
+      "ph": "b39ec48f5de29c7e"
+    },
+    ".githooks/pre-commit": {
+      "fh": "0433581f9b5bb394",
+      "ph": "0433581f9b5bb394"
+    },
+    ".hive/.agents/tester.md": {
+      "fh": "b6120cb7f5ad26eb",
+      "ph": "b6120cb7f5ad26eb"
+    },
+    ".hive/.commands/meta.md": {
+      "fh": "b19578abcb89ed90",
+      "ph": "b19578abcb89ed90"
+    },
+    ".hive/.agents/architect.md": {
+      "fh": "35684b5aec9b6cb2",
+      "ph": "35684b5aec9b6cb2"
+    },
+    ".cursor/rules/hive-rules.mdc": {
+      "fh": "967276069faba56d",
+      "ph": "967276069faba56d"
+    },
+    ".hive/scripts/hive-generate.sh": {
+      "fh": "70ff1ab098b53bf1",
+      "ph": "70ff1ab098b53bf1"
+    },
+    ".githooks/prepare-commit-msg": {
+      "fh": "f26c662b1d7656af",
+      "ph": "f26c662b1d7656af"
+    },
+    ".githooks/pre-commit-review": {
+      "fh": "24b67c87d19a238f",
+      "ph": "24b67c87d19a238f"
+    },
+    ".githooks/pre-push": {
+      "fh": "749b37831e1e2be1",
+      "ph": "749b37831e1e2be1"
+    },
+    ".hive/.commands/sprint-setup.md": {
+      "fh": "e43fad15dcb319db",
+      "ph": "e43fad15dcb319db"
+    },
+    ".cursor/rules/backend-area.mdc": {
+      "fh": "4ce53ddf2188d7f6",
+      "ph": "4ce53ddf2188d7f6"
+    },
+    ".hive/.commands/review.md": {
+      "fh": "34b5a6093aecbcef",
+      "ph": "34b5a6093aecbcef"
+    },
+    ".hive/.agents/orchestrator.md": {
+      "fh": "5de321a930603afe",
+      "ph": "5de321a930603afe"
+    },
+    ".hive/.commands/ci.md": {
+      "fh": "c3016685e48236b2",
+      "ph": "c3016685e48236b2"
+    },
+    ".hive/scripts/install-hooks.sh": {
+      "fh": "2871b84b9da98f1b",
+      "ph": "2871b84b9da98f1b"
+    },
+    ".hive/.commands/new-ticket.md": {
+      "fh": "112acf04adcc7345",
+      "ph": "112acf04adcc7345"
+    },
+    ".hive/.commands/sync.md": {
+      "fh": "d85253161ead34ee",
+      "ph": "d85253161ead34ee"
+    },
+    ".hive/.commands/memory.md": {
+      "fh": "569ac6b8dffda7d0",
+      "ph": "569ac6b8dffda7d0"
+    },
+    ".hive/.commands/ship.md": {
+      "fh": "608af60baef2cf31",
+      "ph": "608af60baef2cf31"
+    },
+    ".hive/.commands/kickoff.md": {
+      "fh": "bb00d610f667e750",
+      "ph": "bb00d610f667e750"
+    },
+    ".hive/scripts/hive-dashboard.sh": {
+      "fh": "8bdec2eef4f228c0",
+      "ph": "8bdec2eef4f228c0"
+    },
+    ".hive/.commands/status.md": {
+      "fh": "db9e701d0b6b75d0",
+      "ph": "db9e701d0b6b75d0"
+    }
+  },
+  "last_sync": "2026-04-30T20:51:18Z",
+  "factory_version": "1.3.0"
+}

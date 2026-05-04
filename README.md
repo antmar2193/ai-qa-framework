@@ -6,127 +6,144 @@
 
 **Give it a URL. Get comprehensive test coverage.**
 
-An autonomous AI-driven QA framework that automatically discovers, tests, and reports on any website—no manual test writing required.
+An autonomous AI-driven QA framework that automatically discovers, tests, and reports on any website — no manual test writing required.
 
 ```bash
-# Install
-pip install -r requirements.txt
-playwright install chromium
-
-# Configure
-python -m src.cli init --target https://yoursite.com
-
-# Run (Anthropic)
+pip install -r requirements.txt && playwright install chromium
 export ANTHROPIC_API_KEY=your_key_here
+python -m src.cli project create --name mysite --target https://yoursite.com
 python -m src.cli run
 ```
 
-**That's it.** The framework will crawl your site, generate intelligent tests using Claude AI, execute them with smart error recovery, and produce detailed reports.
+**That's it.** The framework crawls your site, generates intelligent tests with Claude AI, executes them with smart error recovery, and produces detailed reports.
+
+→ **[Read the full overview](./OVERVIEW.md)** to understand how it works and why it exists.
 
 ---
 
 ## What Makes This Different?
 
-- **Zero test scripts** - AI generates tests by understanding your site
-- **Self-healing** - When selectors break, AI analyzes screenshots and fixes them
-- **Comprehensive coverage** - Functional, visual, and security testing in one pass
-- **Natural language hints** - Guide priorities without writing test specs
-- **Coverage memory** - Tracks what's been tested, focuses on gaps
-
-**→ [Read the full overview](./OVERVIEW.md)** to understand how it works and why it exists.
+- **Zero test scripts** — AI generates tests by understanding your site
+- **Self-healing** — When selectors break, AI analyzes screenshots and fixes them
+- **Comprehensive coverage** — Functional, visual, and security testing in one pass
+- **Natural language hints** — Guide priorities without writing test specs
+- **Coverage memory** — Tracks what's been tested, focuses on gaps
+- **Multi-project** — Manage and run tests for multiple sites from one installation
 
 ---
 
 ## Quick Start
 
-### 1. Install Dependencies
+### Option A: Local Python
+
+**1. Install**
 
 ```bash
 pip install -r requirements.txt
 playwright install chromium
 ```
 
-### 2. Set Up Configuration
-
-Create `qa-config.json`:
-
-```json
-{
-  "target_url": "https://yoursite.com",
-  "categories": ["functional", "visual", "security"],
-  "hints": [
-    "The checkout flow is our most critical path"
-  ]
-}
-```
-
-Or use the CLI:
+**2. Create a project**
 
 ```bash
-python -m src.cli init --target https://yoursite.com
-```
-
-### 3. Run Tests
-
-```bash
-# Option A: Anthropic
 export ANTHROPIC_API_KEY=your_key_here
 
-# Run the full pipeline
-python -m src.cli run
+# Create a named project for your site
+python -m src.cli project create --name mysite --target https://yoursite.com
+
+# Or import an existing qa-config.json
+python -m src.cli project import --name mysite
 ```
 
+**3. Run**
+
 ```bash
-# Option B: Local Ollama (no API key required)
-# In qa-config.json:
+python -m src.cli run             # uses the active project automatically
+open qa-reports/report_*.html    # macOS — or just open the HTML file
+```
+
+### Option B: Docker
+
+No Python setup required — runs in a container with Playwright pre-installed.
+
+```bash
+# 1. Set your API key
+echo "ANTHROPIC_API_KEY=your_key_here" > .env
+
+# 2. Create your config (copy and edit the example)
+cp qa-config.json.example qa-config.json
+
+# 3. Run
+docker compose run qa-framework run --config qa-config.json
+```
+
+Reports are written to `./qa-reports/`.
+
+### Option C: Ollama (no API key)
+
+```bash
+# In qa-config.json set:
 # "ai_provider": "ollama"
 # "ai_model": "llama3.2"
 python -m src.cli run
-
-# View the report
-open qa-reports/report_*.html
 ```
 
 ---
 
-## How It Works
+## Managing Multiple Projects
 
-**Four-stage pipeline:**
+The framework stores named projects under `~/.qa-framework/` so you can manage several sites from one installation.
 
-1. **Crawl** - Real browser discovers pages, forms, elements, and APIs
-2. **Plan** - Claude AI analyzes structure and generates contextual tests
-3. **Execute** - Playwright runs tests with AI-assisted error recovery
-4. **Report** - HTML/JSON reports with screenshots and AI insights
+```bash
+# Create projects
+python -m src.cli project create --name kreitech --target https://kreitech.io
+python -m src.cli project create --name myapp   --target https://myapp.com
 
-**→ [See detailed architecture](./REQUIREMENTS.md#core-architecture)**
+# See all projects
+python -m src.cli project list
 
-## Key Features
+# Switch active project
+python -m src.cli project use kreitech
 
-### Autonomous Testing
-- **Zero manual test writing** - AI generates contextual tests automatically
-- **Self-healing tests** - AI recovers from selector changes
-- **Coverage tracking** - Remembers what's been tested, targets gaps
-- **Regression detection** - Automatically catches pass→fail transitions
+# Run the active project (no --project flag needed)
+python -m src.cli run
 
-### AI-Powered Intelligence
-- **Test generation** - Claude analyzes your site to create relevant tests
-- **Error recovery** - Analyzes screenshots to fix broken selectors
-- **Natural language summaries** - Explains findings in plain English
-- **Hint-based prioritization** - Guide testing with simple phrases
+# Or target a specific project explicitly
+python -m src.cli run --project myapp
 
-### Comprehensive Coverage
-- **Functional tests** - Forms, navigation, workflows, CRUD
-- **Visual regression** - Screenshot baselines, responsive design
-- **Security checks** - XSS, HTTPS, cookies, headers
-- **Evidence collection** - Screenshots, logs, network activity
+# View run history for a project
+python -m src.cli project history kreitech
 
-**→ [See all features in detail](./OVERVIEW.md#key-features)**
+# Import an existing qa-config.json as a named project
+python -m src.cli project import --name legacy --config path/to/qa-config.json
+
+# Delete a project (prompts for confirmation)
+python -m src.cli project delete myapp
+```
+
+Each project gets its own isolated storage:
+
+```
+~/.qa-framework/
+  active-project          ← which project is currently active
+  projects/
+    kreitech/
+      config.json         ← target URL, auth, hints, AI settings
+      runs/               ← run output (test results, evidence)
+      qa-reports/         ← HTML and JSON reports
+    myapp/
+      config.json
+      runs/
+      qa-reports/
+```
+
+> **Backward compatible:** `--config path/to/file.json` always works as before and bypasses project resolution.
 
 ---
 
 ## Configuration
 
-### Basic Configuration
+### Minimal
 
 ```json
 {
@@ -135,6 +152,8 @@ open qa-reports/report_*.html
 ```
 
 ### With Authentication
+
+Passwords are never stored in plain text — use `env:VAR_NAME` to resolve from environment variables at runtime.
 
 ```json
 {
@@ -147,7 +166,14 @@ open qa-reports/report_*.html
 }
 ```
 
-### With Natural Language Hints
+```bash
+export QA_TEST_PASSWORD=secret
+python -m src.cli run
+```
+
+### With Hints
+
+Natural language hints guide AI test priorities without writing specs.
 
 ```json
 {
@@ -160,67 +186,112 @@ open qa-reports/report_*.html
 }
 ```
 
-Hints guide AI priorities without writing test specifications. The AI interprets them and adjusts test generation accordingly.
+### Key Settings
 
-**→ [Complete configuration reference](./REQUIREMENTS.md#configuration)**
+| Field | Default | Description |
+|---|---|---|
+| `target_url` | — | Site to test (required) |
+| `ai_provider` | `"anthropic"` | `"anthropic"` or `"ollama"` |
+| `ai_model` | `"claude-opus-4-6"` | Claude model or Ollama model name |
+| `categories` | `["functional","visual","security"]` | Test types to generate |
+| `max_tests_per_run` | `20` | Cap on AI-generated tests |
+| `max_execution_time_seconds` | `1800` | Pipeline timeout (30 min) |
+| `staleness_threshold_days` | `7` | Days before coverage is considered stale |
 
-## CLI Commands
-
-### Pipeline Operations
-
-```bash
-# Full pipeline (recommended)
-python -m src.cli run
-
-# Individual stages
-python -m src.cli crawl                          # Discover site
-python -m src.cli plan                           # Generate tests
-python -m src.cli execute --plan-file <path>     # Run tests
-```
-
-### Coverage Management
-
-```bash
-# View coverage statistics
-python -m src.cli coverage
-
-# Find untested or stale areas
-python -m src.cli coverage --gaps
-
-# Reset coverage history
-python -m src.cli coverage --reset
-```
-
-### Hint Management
-
-```bash
-# Guide AI priorities with natural language
-python -m src.cli hint add "Checkout flow is critical"
-python -m src.cli hint list
-python -m src.cli hint clear
-```
-
-**→ [Complete CLI reference](./REQUIREMENTS.md#cli-interface)**
+→ **[Complete configuration reference](./REQUIREMENTS.md#configuration)**
 
 ---
 
-## Documentation
+## CLI Reference
 
-### For Everyone
-- **[OVERVIEW.md](./OVERVIEW.md)** - What this is, why it exists, how it works
-- **[README.md](./README.md)** - Quick start guide (you are here)
+### Project Management
 
-### For Developers
-- **[REQUIREMENTS.md](./REQUIREMENTS.md)** - Complete technical specification
-- **[OriginalSpec.md](./OriginalSpec.md)** - Original design document
+```bash
+python -m src.cli project create --name <n> --target <url>   # Create a project
+python -m src.cli project import --name <n> [--config <f>]   # Import existing config
+python -m src.cli project list                                # List all projects
+python -m src.cli project use <name>                         # Set active project
+python -m src.cli project history <name> [--last N]          # View run history
+python -m src.cli project delete <name>                      # Delete a project
+```
 
-### Topics
-- [Architecture & Components](./REQUIREMENTS.md#core-architecture)
-- [Configuration Options](./REQUIREMENTS.md#configuration)
-- [Test Types & Assertions](./REQUIREMENTS.md#test-types--assertions)
-- [AI Integration Details](./REQUIREMENTS.md#ai-integration)
-- [Coverage System](./REQUIREMENTS.md#reporting--coverage)
-- [Extending the Framework](./REQUIREMENTS.md#extensibility)
+### Pipeline
+
+```bash
+python -m src.cli run [--project <n>]                        # Full pipeline
+python -m src.cli crawl [--project <n>]                      # Crawl only
+python -m src.cli plan [--project <n>]                       # Plan only
+python -m src.cli execute --plan-file <f> [--project <n>]    # Execute only
+```
+
+All pipeline commands resolve the config in this order:
+1. `--config path` (always wins, legacy mode)
+2. `--project name`
+3. Active project (`~/.qa-framework/active-project`)
+4. `qa-config.json` in current directory
+
+### Coverage
+
+```bash
+python -m src.cli coverage [--project <n>]          # View coverage summary
+python -m src.cli coverage --gaps [--project <n>]   # Show untested areas
+python -m src.cli coverage --reset [--project <n>]  # Reset history
+```
+
+### Hints
+
+```bash
+python -m src.cli hint add "Checkout flow is critical" [--config <f>]
+python -m src.cli hint list [--config <f>]
+python -m src.cli hint clear [--config <f>]
+```
+
+### Initialization (legacy)
+
+```bash
+python -m src.cli init --target https://yoursite.com   # Create qa-config.json
+```
+
+---
+
+## How It Works
+
+**Four-stage pipeline:**
+
+1. **Crawl** — Real browser discovers pages, forms, elements, and APIs
+2. **Plan** — Claude AI analyzes structure and generates contextual tests
+3. **Execute** — Playwright runs tests with AI-assisted error recovery
+4. **Report** — HTML/JSON reports with screenshots and AI insights
+
+→ **[Detailed pipeline walkthrough](./OVERVIEW.md#how-it-works)**
+
+---
+
+## What Gets Generated
+
+After `python -m src.cli run` with a named project:
+
+```
+~/.qa-framework/projects/mysite/
+  runs/
+    {run-id}/
+      run_result.json      ← pass/fail stats, timing
+      evidence/            ← screenshots per test step
+  qa-reports/
+    report_{run-id}.html   ← interactive HTML report
+    report_{run-id}.json   ← machine-readable results
+
+.qa-framework/             ← local working data (in project dir)
+  site_model/model.json    ← crawled site structure
+  coverage/registry.json   ← coverage history
+```
+
+**The HTML report includes:**
+- Pass/fail statistics with visual breakdown
+- AI-generated natural language summary
+- Step-by-step execution with screenshots
+- Regression detection (tests that newly fail vs. last run)
+- Coverage metrics
 
 ---
 
@@ -228,130 +299,68 @@ python -m src.cli hint clear
 
 - **Python 3.12+**
 - **Chromium** (via `playwright install chromium`)
-- **Anthropic API key** (optional, if using `ai_provider: "anthropic"`)
-- **Ollama** local runtime (optional, if using `ai_provider: "ollama"`)
+- **Anthropic API key** — recommended; the framework still runs without it in basic mode
 
 ### Environment Variables
 
-```bash
-export ANTHROPIC_API_KEY=your_key_here    # For AI features
-export OLLAMA_BASE_URL=http://localhost:11434  # Optional override for Ollama host
-export QA_TEST_PASSWORD=secret            # For auth (if needed)
-```
-
-**Without any configured AI provider**, the framework operates in fallback mode:
-- Basic test generation (template-based)
-- No AI summaries or error recovery
-- All execution features remain available
-
-**→ [Technical specifications](./REQUIREMENTS.md#technical-specifications)**
-
----
-
-## What Gets Generated
-
-After running `python -m src.cli run`, you'll have:
-
-```
-.qa-framework/
-├── site_model/model.json          # Discovered site structure
-├── coverage/registry.json         # Test coverage history
-└── latest_plan.json               # Generated test plan
-
-qa-reports/
-├── report_run_*.html              # Interactive HTML report
-└── report_run_*.json              # Machine-readable results
-```
-
-**Open the HTML report** to see:
-- Pass/fail statistics with visual breakdown
-- AI-generated natural language summary
-- Step-by-step test execution with screenshots
-- Regression detection
-- Coverage metrics
+| Variable | Required | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Recommended | Claude AI for test generation and recovery |
+| `OLLAMA_BASE_URL` | No | Custom Ollama endpoint (default: `http://localhost:11434`) |
+| Any `env:VAR_NAME` in config | Depends | Credentials injected at runtime |
 
 ---
 
 ## Real-World Example
 
-Testing an e-commerce site:
-
 ```bash
-# 1. Initialize
-python -m src.cli init --target https://myshop.com
+# Set up a new project
+python -m src.cli project create --name myshop --target https://myshop.com
+python -m src.cli hint add "Checkout flow is business-critical" --config ~/.qa-framework/projects/myshop/config.json
+python -m src.cli hint add "Product search has been unreliable"  --config ~/.qa-framework/projects/myshop/config.json
 
-# 2. Add priority hints
-python -m src.cli hint add "Checkout flow is business-critical"
-python -m src.cli hint add "Product search has been unreliable"
-
-# 3. Run tests
+# Run
 export ANTHROPIC_API_KEY=your_key
 python -m src.cli run
 
-# 4. Review results
-open qa-reports/report_*.html
+# Check history next week
+python -m src.cli project history myshop
 ```
 
-**What happens:**
-- Crawls homepage, products, cart, checkout (5-10 min)
-- AI generates ~25 relevant tests (30-60 sec)
-- Executes tests with smart recovery (10-20 min)
-- Creates detailed report with insights
-
-**Example findings:**
+**Typical findings:**
 - "Add to cart" button selector changed → AI auto-fixed
 - XSS vulnerability in product review form → Flagged
 - Visual regression: Logo alignment shifted → Screenshot diff
 - Checkout flow: 100% passing
 
-**→ [See full example walkthrough](./OVERVIEW.md#real-world-example)**
-
 ---
 
-## Who Is This For?
+## Documentation
 
-**Development Teams** - Get comprehensive testing without maintaining test scripts
-
-**QA Engineers** - Focus on strategy while AI handles test generation
-
-**Solo Developers** - Enterprise-level QA without a dedicated team
-
-**Anyone who wants** - Continuous, intelligent testing that adapts to change
-
-**→ [Learn more about use cases](./OVERVIEW.md#who-is-this-for)**
+| Doc | Contents |
+|---|---|
+| [README.md](./README.md) | Quick start (you are here) |
+| [OVERVIEW.md](./OVERVIEW.md) | Full introduction: pipeline, features, comparisons |
+| [REQUIREMENTS.md](./REQUIREMENTS.md) | Complete technical specification |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Development setup and contribution guide |
+| [SECURITY.md](./SECURITY.md) | Reporting vulnerabilities |
 
 ---
 
 ## Contributing
 
-We welcome contributions! See the [Contributing Guide](./CONTRIBUTING.md) for how to get started.
+We welcome contributions. See [CONTRIBUTING.md](./CONTRIBUTING.md) to get started.
 
 Areas of interest:
-- Additional test categories (accessibility, performance)
+- Accessibility testing category
 - Multi-browser support (Firefox, WebKit)
 - Enhanced authentication (OAuth, SAML)
-- Custom assertion types
+- Scheduled / CI-triggered runs
 
-Please report security vulnerabilities via the process described in [SECURITY.md](./SECURITY.md).
+Please report security vulnerabilities via [SECURITY.md](./SECURITY.md).
 
 ---
 
 ## License
 
-This project is licensed under the Apache License 2.0 — see the [LICENSE](./LICENSE) file for details.
-
----
-
-## Get Started
-
-Ready to test your site?
-
-```bash
-pip install -r requirements.txt
-playwright install chromium
-python -m src.cli init --target https://yoursite.com
-export ANTHROPIC_API_KEY=your_key_here
-python -m src.cli run
-```
-
-**Questions?** Read [OVERVIEW.md](./OVERVIEW.md) for a comprehensive introduction or [REQUIREMENTS.md](./REQUIREMENTS.md) for technical details.
+Apache License 2.0 — see [LICENSE](./LICENSE).

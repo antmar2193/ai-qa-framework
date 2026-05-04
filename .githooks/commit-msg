@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# commit-msg — enforce HIVE commit format (0 LLM tokens)
+# Format: <type>(<scope>): <description>  [subject ≤72 chars, no trailing period]
+# Trailer: Refs: <ticket-id>              [required when ticket tool is not "none"]
+#
+# Skip by setting HIVE_SKIP_HOOKS=1
+
+set -euo pipefail
+
+[[ "${HIVE_SKIP_HOOKS:-}" == "1" ]] && exit 0
+
+COMMIT_FILE="$1"
+COMMIT_MSG=$(cat "$COMMIT_FILE")
+FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
+
+RED='\033[0;31m'; YELLOW='\033[1;33m'; NC='\033[0m'
+err() { echo -e "${RED}[commit-msg]${NC} $1" >&2; }
+
+# ── Skip special commits ──────────────────────────────────────
+if echo "$FIRST_LINE" | grep -qE "^(Merge|Revert|fixup!|squash!|WIP:)"; then
+    exit 0
+fi
+
+# Skip initial commit — no sprint context exists yet
+if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+    exit 0
+fi
+
+# ── Validate subject format ───────────────────────────────────
+VALID_TYPES="feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert"
+
+if ! echo "$FIRST_LINE" | grep -qE "^(${VALID_TYPES})(\([a-z0-9/_-]+\))?: .{1,}$"; then
+    err "Invalid commit subject format."
+    echo "" >&2
+    echo "  Expected : <type>(<scope>): <description>" >&2
+    echo "  Got      : ${FIRST_LINE}" >&2
+    echo "" >&2
+    echo "  Valid types: feat  fix  docs  style  refactor  test  chore  perf  ci  build  revert" >&2
+    echo "  Examples  : feat(auth): add JWT refresh token endpoint" >&2
+    echo "              fix(payments): handle zero-amount edge case" >&2
+    echo "              chore: update dependencies" >&2
+    echo "" >&2
+    exit 1
+fi
+
+# ── Subject length ────────────────────────────────────────────
+if [[ ${#FIRST_LINE} -gt 72 ]]; then
+    err "Subject too long: ${#FIRST_LINE} chars (max 72)."
+    echo "" >&2
+    echo "  Got: ${FIRST_LINE}" >&2
+    echo "" >&2
+    exit 1
+fi
+
+# ── No trailing period ────────────────────────────────────────
+if echo "$FIRST_LINE" | grep -qE '\.$'; then
+    err "Subject must not end with a period."
+    echo "  Got: ${FIRST_LINE}" >&2
+    exit 1
+fi
+
+# ── Refs: trailer — required when ticket tool is configured ───
+HIVE_CONFIG=".hive/AGENTS.local.md"
+TICKET_TOOL="none"
+if [[ -f "$HIVE_CONFIG" ]]; then
+    # sed replaces grep -oP (\K not available in BSD grep on macOS)
+    # Matches the first tool: field which is always ticket_provider.tool
+    TICKET_TOOL=$(sed -n 's/^[[:space:]]*tool:[[:space:]]*"\([^"]*\)".*/\1/p' "$HIVE_CONFIG" 2>/dev/null | head -1 || echo "none")
+    [[ -z "$TICKET_TOOL" ]] && TICKET_TOOL="none"
+fi
+
+if [[ "$TICKET_TOOL" != "none" && -n "$TICKET_TOOL" ]]; then
+    if ! echo "$COMMIT_MSG" | grep -qE "^Refs: .+"; then
+        err "Missing required trailer: Refs: <ticket-id>"
+        echo "" >&2
+        echo "  Your project uses ${TICKET_TOOL} for tickets." >&2
+        echo "  Add the ticket reference as a trailer:" >&2
+        echo "" >&2
+        echo "    feat(auth): add login endpoint" >&2
+        echo "" >&2
+        echo "    Refs: PROJ-123" >&2
+        echo "" >&2
+        echo "  Tip: name branches like feature/PROJ-123-desc and prepare-commit-msg" >&2
+        echo "  will inject this automatically." >&2
+        echo "" >&2
+        exit 1
+    fi
+fi
+
+exit 0

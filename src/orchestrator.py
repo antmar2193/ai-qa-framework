@@ -28,12 +28,12 @@ logger = logging.getLogger(__name__)
 class Orchestrator:
     """Coordinates the full QA pipeline."""
 
-    def __init__(self, config: FrameworkConfig):
+    def __init__(self, config: FrameworkConfig, runs_dir: Path | None = None):
         self.config = config
         self.framework_dir = Path(".qa-framework")
         self.framework_dir.mkdir(exist_ok=True)
-        self.runs_dir = Path("runs")
-        self.runs_dir.mkdir(exist_ok=True)
+        self.runs_dir = runs_dir if runs_dir is not None else Path("runs")
+        self.runs_dir.mkdir(parents=True, exist_ok=True)
 
         # Set up AI debug logging directory
         debug_dir = self.framework_dir / "debug"
